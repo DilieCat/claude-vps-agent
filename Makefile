@@ -21,8 +21,12 @@ help: ## Show this help
 setup: ## Run interactive setup wizard
 	npx tsx setup.ts
 
-install: ## Install all Node.js dependencies
+install: ## Install dependencies and register claudebridge command
 	npm install
+	npm link 2>/dev/null || true
+	@echo ""
+	@echo "  ✓ Dependencies installed"
+	@command -v claudebridge &>/dev/null && echo "  ✓ 'claudebridge' command registered" || echo "  ⚠ 'claudebridge' not linked (use 'npx claudebridge' instead)"
 
 # ---------------------------------------------------------------------------
 # Run services locally
