@@ -9,37 +9,71 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
 
 const LOCK_POLL_MS = 50;
 const LOCK_TIMEOUT_MS = 10_000;
+const LOCK_STALE_MS = 60_000;
 
 /**
- * Acquire an exclusive advisory lock on `filePath` using flock(1).
- * Returns a release function that unlocks and cleans up.
+ * Check whether a lock file is stale (owning process is dead or file is too old).
  */
-function acquireLockSync(filePath: string): () => void {
-  const lockPath = filePath + ".lock";
-  const fd = fs.openSync(lockPath, "w");
+function isLockStale(lockPath: string, maxAgeMs = LOCK_STALE_MS): boolean {
   try {
-    execFileSync("flock", ["-x", "-n", fd.toString()], { stdio: "ignore" });
-  } catch {
-    // flock as a standalone command may not work with fd on all platforms.
-    // Fall back to spin-lock using O_EXCL.
-    fs.closeSync(fd);
-    return acquireLockSyncExcl(filePath);
-  }
-  return () => {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // already closed
+    const content = fs.readFileSync(lockPath, "utf-8").trim();
+    const pid = parseInt(content, 10);
+    if (!isNaN(pid)) {
+      try {
+        process.kill(pid, 0);
+        return false; // process alive
+      } catch {
+        return true; // process dead = stale
+      }
     }
-  };
+    // Can't read PID, check file age
+    const stat = fs.statSync(lockPath);
+    return Date.now() - stat.mtimeMs > maxAgeMs;
+  } catch {
+    return true; // can't read lock file = stale
+  }
 }
 
 /**
- * Fallback lock using O_EXCL (atomic create). Spins until acquired or timeout.
+ * Acquire an exclusive lock asynchronously with setTimeout-based retry.
+ * Returns a release function that removes the lock file.
+ */
+async function acquireLockAsync(filePath: string, timeoutMs = LOCK_TIMEOUT_MS): Promise<() => void> {
+  const lockPath = filePath + ".lock";
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      fs.writeSync(fd, process.pid.toString());
+      fs.closeSync(fd);
+      return () => {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {}
+      };
+    } catch (e: any) {
+      if (e.code === "EEXIST") {
+        if (isLockStale(lockPath)) {
+          try {
+            fs.unlinkSync(lockPath);
+          } catch {}
+          continue;
+        }
+        await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error(`Timeout acquiring lock: ${lockPath}`);
+}
+
+/**
+ * Acquire an exclusive lock synchronously using O_EXCL. Spins until acquired or timeout.
+ * Includes stale lock detection.
  */
 function acquireLockSyncExcl(filePath: string): () => void {
   const lockPath = filePath + ".lock";
@@ -57,7 +91,14 @@ function acquireLockSyncExcl(filePath: string): () => void {
       if (Date.now() > deadline) {
         throw new Error(`Timeout acquiring lock on ${lockPath}`);
       }
-      // Busy-wait
+      // Check for stale lock before waiting
+      if (isLockStale(lockPath)) {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {}
+        continue;
+      }
+      // Brief sleep to avoid burning CPU
       const waitUntil = Date.now() + LOCK_POLL_MS;
       while (Date.now() < waitUntil) {
         /* spin */
@@ -78,7 +119,7 @@ function acquireLockSyncExcl(filePath: string): () => void {
  * Execute `fn` while holding an exclusive file lock on `filePath`.
  */
 export async function withFileLock<T>(filePath: string, fn: () => T | Promise<T>): Promise<T> {
-  const release = acquireLockSyncExcl(filePath);
+  const release = await acquireLockAsync(filePath);
   try {
     return await fn();
   } finally {
