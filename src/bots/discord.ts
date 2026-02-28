@@ -45,7 +45,7 @@ const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
   process.env["ALLOWED_PROJECT_BASE"] ?? (process.env["HOME"] ?? "."),
 );
 
-const PROJECT_ROOT = path.resolve(import.meta.dirname ?? ".", "..", "..");
+const PROJECT_ROOT = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), "..", "..");
 
 // Per-user settings
 interface UserSettings {
@@ -146,11 +146,19 @@ function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
 
   // Create a bridge with user-specific overrides
   const BridgeClass = livingMode ? LivingBridge : ClaudeBridge;
-  return new BridgeClass({
+  const overridden = new BridgeClass({
     projectDir: settings.projectDir ?? bridge.projectDir,
     model: settings.model ?? bridge.model,
     allowedTools: bridge.allowedTools.length > 0 ? bridge.allowedTools : undefined,
   });
+
+  // For LivingBridge, share the same brain and sessions
+  if (livingMode && overridden instanceof LivingBridge && bridge instanceof LivingBridge) {
+    Object.defineProperty(overridden, "brain", { value: bridge.brain });
+    Object.defineProperty(overridden, "sessions", { value: bridge.sessions });
+  }
+
+  return overridden;
 }
 
 function splitMessage(text: string, limit: number = DISCORD_MAX_LEN): string[] {
@@ -282,10 +290,10 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
 // Notification poller
 // ---------------------------------------------------------------------------
 
-function startNotificationPoller(): void {
-  if (!notificationQueue) return;
+function startNotificationPoller(): ReturnType<typeof setInterval> | null {
+  if (!notificationQueue) return null;
 
-  setInterval(async () => {
+  return setInterval(async () => {
     try {
       const notifications: Notification[] = notificationQueue!.popAll("discord");
       if (notifications.length === 0) return;
@@ -503,10 +511,20 @@ client.once("ready", async () => {
   }
 
   // Start notification poller
-  startNotificationPoller();
+  const notifInterval = startNotificationPoller();
   if (notificationQueue) {
     console.log(`[discord] Notification poller started (every ${NOTIFICATION_POLL_INTERVAL / 1000}s).`);
   }
+
+  // Graceful shutdown
+  const shutdown = () => {
+    console.log("[discord] Shutting down...");
+    if (notifInterval) clearInterval(notifInterval);
+    client.destroy();
+    process.exit(0);
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 });
 
 // ---------------------------------------------------------------------------
