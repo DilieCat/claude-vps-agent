@@ -10,4 +10,5 @@ dist/
 .pids/
 logs/
 *.log
+data/system-prompt.md
 .DS_Store

@@ -529,13 +529,50 @@ async function stepModuleConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Step 5 - Claude permissions & settings
+// Step 5 - Agent Identity
+// ---------------------------------------------------------------------------
+
+async function stepAgentIdentity(): Promise<void> {
+  heading("Step 5: Agent Identity");
+  info("Choose a name for your agent.");
+  info("This is how the agent will introduce itself in chat.");
+  console.log();
+
+  const agentName = await askInput("Agent name", "Atlas");
+
+  // Generate data/system-prompt.md from template
+  const templatePath = path.join(PROJECT_ROOT, "data", "system-prompt.template.md");
+  if (fs.existsSync(templatePath)) {
+    const template = fs.readFileSync(templatePath, "utf-8");
+    const content = template.replace(/\{AGENT_NAME\}/g, agentName);
+    const outPath = path.join(PROJECT_ROOT, "data", "system-prompt.md");
+    fs.writeFileSync(outPath, content, "utf-8");
+    ok(`System prompt written with agent name: ${agentName}`);
+  } else {
+    warn("Template data/system-prompt.template.md not found — skipping.");
+  }
+
+  // Update data/brain.md from template with agent name
+  const brainTemplatePath = path.join(PROJECT_ROOT, "data", "brain.template.md");
+  const brainPath = path.join(PROJECT_ROOT, "data", "brain.md");
+  if (fs.existsSync(brainTemplatePath) && !fs.existsSync(brainPath)) {
+    const brainTemplate = fs.readFileSync(brainTemplatePath, "utf-8");
+    const brainContent = brainTemplate.replace(/\{AGENT_NAME\}/g, agentName);
+    fs.writeFileSync(brainPath, brainContent, "utf-8");
+    ok(`Brain initialized for ${agentName}`);
+  } else if (fs.existsSync(brainPath)) {
+    info("Existing brain.md found — not overwriting.");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 6 - Claude permissions & settings
 // ---------------------------------------------------------------------------
 
 async function stepClaudeSettings(
   existingEnv: Record<string, string>,
 ): Promise<Record<string, string>> {
-  heading("Step 5: Claude Permissions");
+  heading("Step 6: Claude Permissions");
   info("Claude Code needs permission to use tools (read files, edit code, run");
   info("commands, etc). Without this, the bot can only answer questions but");
   info("cannot actually work on your code.");
@@ -620,7 +657,7 @@ const ENV_SECTION_ORDER: Array<[string, string[]]> = [
 async function stepGenerateEnv(
   envVars: Record<string, string>,
 ): Promise<void> {
-  heading("Step 5: Generate .env");
+  heading("Step 7: Generate .env");
 
   const lines: string[] = [];
   for (const [sectionName, keys] of ENV_SECTION_ORDER) {
@@ -691,11 +728,11 @@ async function stepGenerateEnv(
 }
 
 // ---------------------------------------------------------------------------
-// Step 7 - Install dependencies (npm install)
+// Step 8 - Install dependencies (npm install)
 // ---------------------------------------------------------------------------
 
 async function stepInstallDeps(): Promise<void> {
-  heading("Step 6: Install Dependencies");
+  heading("Step 8: Install Dependencies");
 
   if (!(await askYesNo("  Run npm install now?", true))) {
     warn("Skipping dependency installation.");
@@ -729,13 +766,13 @@ async function stepInstallDeps(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Step 8 - Optionally install systemd services (Linux only)
+// Step 9 - Optionally install systemd services (Linux only)
 // ---------------------------------------------------------------------------
 
 async function stepSystemdServices(selected: string[]): Promise<void> {
   if (!hasSystemctl()) return;
 
-  heading("Step 7: Systemd Services (optional)");
+  heading("Step 9: Systemd Services (optional)");
   info("This server has systemd. You can install services so your");
   info("bots start automatically and restart on failure.");
   console.log();
@@ -867,20 +904,23 @@ async function main(): Promise<void> {
     // 5. Per-module config
     const envVars = await stepModuleConfig(selected, existingEnv);
 
-    // 5b. Claude permissions & settings
+    // 5b. Agent identity (name + system prompt)
+    await stepAgentIdentity();
+
+    // 5c. Claude permissions & settings
     const claudeVars = await stepClaudeSettings(existingEnv);
     Object.assign(envVars, claudeVars);
 
-    // 6. Generate .env
+    // 7. Generate .env
     await stepGenerateEnv(envVars);
 
-    // 7. Install dependencies (npm install)
+    // 8. Install dependencies (npm install)
     await stepInstallDeps();
 
-    // 8. Optionally install systemd services (Linux only)
+    // 9. Optionally install systemd services (Linux only)
     await stepSystemdServices(selected);
 
-    // 9. Summary
+    // 10. Summary
     stepSummary(selected);
   } catch (e) {
     if (e instanceof Error && e.message.includes("readline was closed")) {

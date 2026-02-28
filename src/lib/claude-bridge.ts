@@ -147,6 +147,12 @@ export class ClaudeBridge {
       cmd.push("--max-budget-usd", String(this.maxBudgetUsd));
     }
 
+    // Append system prompt with agent personality if available
+    const systemPromptFile = path.join(this.projectDir, "data", "system-prompt.md");
+    if (fs.existsSync(systemPromptFile)) {
+      cmd.push("--append-system-prompt-file", systemPromptFile);
+    }
+
     return cmd;
   }
 
