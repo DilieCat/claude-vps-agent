@@ -141,7 +141,14 @@ function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
 // ---------------------------------------------------------------------------
 // Bot setup
 // ---------------------------------------------------------------------------
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
+  ],
+});
 
 // ---------------------------------------------------------------------------
 // Slash command definitions
@@ -423,6 +430,79 @@ client.on("interactionCreate", async (interaction) => {
         "- Use `/reset` to start a fresh conversation.\n";
     }
     await interaction.reply(helpText);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Message handler — respond to regular chat messages
+// ---------------------------------------------------------------------------
+
+client.on("messageCreate", async (message) => {
+  // Ignore own messages
+  if (message.author.bot) return;
+
+  // Determine if we should respond:
+  // 1. DMs — always respond
+  // 2. Mentions — when the bot is @mentioned
+  // 3. Thread replies — when replying in a thread the bot created
+  const isDM = message.channel.type === ChannelType.DM;
+  const isMentioned = message.mentions.has(client.user!);
+  const isInBotThread =
+    message.channel.isThread() &&
+    message.channel.ownerId === client.user?.id;
+
+  if (!isDM && !isMentioned && !isInBotThread) return;
+
+  // Authorization check
+  const userId = message.author.id;
+  const userTag = message.author.tag;
+  if (!isAllowed(userId, userTag)) {
+    await message.reply("You are not authorized to use this bot.");
+    return;
+  }
+
+  // Strip the bot mention from the message text
+  let prompt = message.content;
+  if (client.user) {
+    prompt = prompt.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim();
+  }
+
+  if (!prompt) {
+    await message.reply("Send me a message and I'll ask Claude for you.");
+    return;
+  }
+
+  // Show typing indicator
+  await message.channel.sendTyping();
+
+  const userBridge = getUserBridge(userId);
+  let response;
+  try {
+    if (livingMode && userBridge instanceof LivingBridge) {
+      response = await userBridge.askAs("discord", userId, prompt);
+    } else {
+      response = await userBridge.askAsync(prompt);
+    }
+  } catch (err) {
+    console.error(`[discord] Error processing message from ${userId}:`, err);
+    await message.reply("Sorry, something went wrong while contacting Claude. Please try again later.");
+    return;
+  }
+
+  if (response.isError) {
+    await message.reply(`**Error:** ${response.text}`);
+    return;
+  }
+
+  // Send the response, splitting if necessary
+  const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
+  for (const chunk of chunks) {
+    await message.reply(chunk);
+  }
+
+  // Footer with cost info
+  if (response.costUsd > 0) {
+    await message.channel.send(`-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`);
   }
 });
 
