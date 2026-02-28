@@ -10,6 +10,5 @@ dist/
 .pids/
 logs/
 *.log
-data/system-prompt.md
 data/brain.md
 .DS_Store
