@@ -8,12 +8,15 @@
   },
   "scripts": {
     "build": "tsc",
-    "setup": "npx tsx setup.ts",
+    "start": "tsx src/cli.ts start",
+    "stop": "tsx src/cli.ts stop",
+    "restart": "tsx src/cli.ts restart",
+    "status": "tsx src/cli.ts status",
+    "setup": "tsx setup.ts",
     "telegram": "npx tsx src/bots/telegram.ts",
     "discord": "npx tsx src/bots/discord.ts",
     "scheduler": "npx tsx src/scheduler.ts",
     "scheduler:once": "npx tsx src/scheduler.ts --once",
-    "start": "npm run telegram & npm run discord & npm run scheduler",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

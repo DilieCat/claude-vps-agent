@@ -44,73 +44,20 @@ scheduler-once: ## Run scheduler one-shot (check and run due tasks)
 # Service management (works with systemd or local processes)
 # ---------------------------------------------------------------------------
 
-start: ## Start all enabled services (stops existing ones first)
-	@$(MAKE) stop --no-print-directory 2>/dev/null || true
-	@mkdir -p .pids
-	@if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then \
-		echo "Starting services via systemd..."; \
-		for svc in $(SERVICES); do \
-			if systemctl is-enabled $$svc.service &>/dev/null; then \
-				sudo systemctl start $$svc.service && echo "  $$svc: started" || echo "  $$svc: failed"; \
-			else \
-				echo "  $$svc: not enabled (skip)"; \
-			fi; \
-		done; \
-	else \
-		echo "Starting services as background processes..."; \
-		echo "(Use 'make stop' to stop them later)"; \
-		if [ -f src/bots/telegram.ts ]; then \
-			npx tsx src/bots/telegram.ts & echo $$! > .pids/telegram-bot.pid; echo "  telegram-bot: started (PID $$!)"; \
-		fi; \
-		if [ -f src/bots/discord.ts ]; then \
-			npx tsx src/bots/discord.ts & echo $$! > .pids/discord-bot.pid; echo "  discord-bot: started (PID $$!)"; \
-		fi; \
-		if [ -f src/scheduler.ts ]; then \
-			npx tsx src/scheduler.ts & echo $$! > .pids/scheduler.pid; echo "  scheduler: started (PID $$!)"; \
-		fi; \
-	fi
+start: ## Start all enabled services
+	npx tsx src/cli.ts start
 
 stop: ## Stop all services
-	@if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then \
-		echo "Stopping services via systemd..."; \
-		for svc in $(SERVICES); do \
-			sudo systemctl stop $$svc.service 2>/dev/null && echo "  $$svc: stopped" || echo "  $$svc: not running"; \
-		done; \
-	else \
-		echo "Stopping background processes..."; \
-		pkill -f 'src/bots/telegram.ts' 2>/dev/null && echo "  telegram-bot: stopped" || echo "  telegram-bot: not running"; \
-		pkill -f 'src/bots/discord.ts' 2>/dev/null && echo "  discord-bot: stopped" || echo "  discord-bot: not running"; \
-		pkill -f 'src/scheduler.ts' 2>/dev/null && echo "  scheduler: stopped" || echo "  scheduler: not running"; \
-		rm -f .pids/*.pid 2>/dev/null; \
-	fi
+	npx tsx src/cli.ts stop
 
 restart: ## Restart all services
-	@$(MAKE) stop
-	@$(MAKE) start
+	npx tsx src/cli.ts restart
 
-status: ## Show status of services
-	@if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then \
-		for svc in $(SERVICES); do \
-			if systemctl is-enabled $$svc.service &>/dev/null; then \
-				status=$$(systemctl is-active $$svc.service 2>/dev/null || true); \
-				echo "  $$svc: $$status"; \
-			else \
-				echo "  $$svc: not installed"; \
-			fi; \
-		done; \
-	else \
-		echo "Checking local processes..."; \
-		pgrep -fa 'src/bots/telegram.ts' >/dev/null 2>&1 && echo "  telegram-bot: running" || echo "  telegram-bot: not running"; \
-		pgrep -fa 'src/bots/discord.ts' >/dev/null 2>&1 && echo "  discord-bot: running" || echo "  discord-bot: not running"; \
-		pgrep -fa 'src/scheduler.ts' >/dev/null 2>&1 && echo "  scheduler: running" || echo "  scheduler: not running"; \
-	fi
+status: ## Show service status
+	npx tsx src/cli.ts status
 
 logs: ## Tail service logs
-	@if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then \
-		sudo journalctl -u telegram-bot -u discord-bot -u scheduler -f --no-pager; \
-	else \
-		echo "No systemd detected. Check process output directly or use 'make telegram' etc. in separate terminals."; \
-	fi
+	npx tsx src/cli.ts logs
 
 # ---------------------------------------------------------------------------
 # Code quality
