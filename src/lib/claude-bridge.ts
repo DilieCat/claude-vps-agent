@@ -97,6 +97,7 @@ export class ClaudeBridge {
   readonly allowedTools: string[];
   readonly maxBudgetUsd: number | undefined;
   readonly timeoutSeconds: number;
+  private readonly systemPrompt: string | undefined;
 
   constructor(options: {
     projectDir?: string;
@@ -107,6 +108,16 @@ export class ClaudeBridge {
   } = {}) {
     this.projectDir = options.projectDir ?? process.cwd();
     this.model = options.model ?? process.env["CLAUDE_MODEL"];
+
+    // Cache system prompt at construction time (read once, not per request)
+    const systemPromptFile = path.join(this.projectDir, "data", "system-prompt.md");
+    try {
+      if (fs.existsSync(systemPromptFile)) {
+        this.systemPrompt = fs.readFileSync(systemPromptFile, "utf-8");
+      }
+    } catch {
+      console.warn("[claude-bridge] Could not read system-prompt.md, proceeding without it.");
+    }
 
     if (options.allowedTools) {
       this.allowedTools = options.allowedTools;
@@ -147,11 +158,9 @@ export class ClaudeBridge {
       cmd.push("--max-budget-usd", String(this.maxBudgetUsd));
     }
 
-    // Append system prompt with agent personality if available
-    const systemPromptFile = path.join(this.projectDir, "data", "system-prompt.md");
-    if (fs.existsSync(systemPromptFile)) {
-      const systemPrompt = fs.readFileSync(systemPromptFile, "utf-8");
-      cmd.push("--append-system-prompt", systemPrompt);
+    // Append cached system prompt with agent personality if available
+    if (this.systemPrompt) {
+      cmd.push("--append-system-prompt", this.systemPrompt);
     }
 
     return cmd;

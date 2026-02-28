@@ -35,7 +35,9 @@ export class Brain {
   private initBrain(): void {
     const templatePath = path.join(PROJECT_ROOT, "data", "brain.template.md");
     if (fs.existsSync(templatePath)) {
-      fs.writeFileSync(this.path, fs.readFileSync(templatePath, "utf-8"));
+      // Replace {AGENT_NAME} placeholder with default; setup wizard uses the real name
+      const template = fs.readFileSync(templatePath, "utf-8");
+      fs.writeFileSync(this.path, template.replace(/\{AGENT_NAME\}/g, "Atlas"));
     } else {
       fs.writeFileSync(this.path, DEFAULT_TEMPLATE);
     }
