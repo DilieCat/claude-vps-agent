@@ -655,7 +655,7 @@ async function stepClaudeSettings(
 }
 
 // ---------------------------------------------------------------------------
-// Step 6 - Generate .env
+// Step 7 - Generate .env
 // ---------------------------------------------------------------------------
 
 const ENV_SECTION_ORDER: Array<[string, string[]]> = [
@@ -847,7 +847,7 @@ async function stepSystemdServices(selected: string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Step 9 - Summary
+// Step 10 - Summary
 // ---------------------------------------------------------------------------
 
 function stepSummary(selected: string[]): void {
