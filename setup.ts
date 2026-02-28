@@ -117,10 +117,15 @@ async function askYesNo(prompt: string, defaultYes = true): Promise<boolean> {
 async function askInput(
   prompt: string,
   defaultValue?: string,
+  optional?: boolean,
 ): Promise<string> {
   if (defaultValue) {
     const raw = (await question(`  ${prompt} [${defaultValue}]: `)).trim();
     return raw || defaultValue;
+  }
+  if (optional) {
+    const raw = (await question(`  ${prompt}: `)).trim();
+    return raw;
   }
   while (true) {
     const raw = (await question(`  ${prompt}: `)).trim();
@@ -641,6 +646,7 @@ async function stepClaudeSettings(
   const model = await askInput(
     "Claude model (leave empty for default)",
     existingEnv.CLAUDE_MODEL ?? "",
+    true,
   );
   if (model) envVars.CLAUDE_MODEL = model;
 
@@ -648,6 +654,7 @@ async function stepClaudeSettings(
   const projectDir = await askInput(
     "Default project directory (leave empty for current dir)",
     existingEnv.CLAUDE_PROJECT_DIR ?? "",
+    true,
   );
   if (projectDir) envVars.CLAUDE_PROJECT_DIR = projectDir;
 
