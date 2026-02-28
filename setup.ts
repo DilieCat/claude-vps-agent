@@ -529,10 +529,90 @@ async function stepModuleConfig(
 }
 
 // ---------------------------------------------------------------------------
+// Step 5 - Claude permissions & settings
+// ---------------------------------------------------------------------------
+
+async function stepClaudeSettings(
+  existingEnv: Record<string, string>,
+): Promise<Record<string, string>> {
+  heading("Step 5: Claude Permissions");
+  info("Claude Code needs permission to use tools (read files, edit code, run");
+  info("commands, etc). Without this, the bot can only answer questions but");
+  info("cannot actually work on your code.");
+  console.log();
+  info("Choose a permission level:");
+  console.log();
+  info("  1) Read-only        — Can read files and search code");
+  info("                        Tools: Read, Glob, Grep");
+  console.log();
+  info("  2) Read + Write     — Can read, edit files, and run commands (recommended)");
+  info("                        Tools: Read, Write, Edit, Bash, Glob, Grep");
+  console.log();
+  info("  3) Full access      — All tools including web search and fetch");
+  info("                        Tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch");
+  console.log();
+  info("  4) Custom           — Specify tools manually");
+  console.log();
+
+  const PRESETS: Record<string, string> = {
+    "1": "Read,Glob,Grep",
+    "2": "Read,Write,Edit,Bash,Glob,Grep",
+    "3": "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch",
+  };
+
+  const existingTools = existingEnv.CLAUDE_ALLOWED_TOOLS;
+  let defaultChoice = "2";
+  if (existingTools) {
+    // Detect which preset matches
+    const match = Object.entries(PRESETS).find(([, v]) => v === existingTools);
+    defaultChoice = match ? match[0] : "4";
+  }
+
+  const choice = await askInput(
+    `Permission level [1-4]`,
+    defaultChoice,
+  );
+
+  const envVars: Record<string, string> = {};
+
+  if (choice === "4") {
+    info("Available tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch");
+    const custom = await askInput(
+      "Tools (comma-separated)",
+      existingTools ?? "Read,Write,Edit,Bash,Glob,Grep",
+    );
+    envVars.CLAUDE_ALLOWED_TOOLS = custom;
+  } else {
+    const tools = PRESETS[choice] ?? PRESETS["2"];
+    envVars.CLAUDE_ALLOWED_TOOLS = tools;
+  }
+
+  ok(`Tools: ${envVars.CLAUDE_ALLOWED_TOOLS}`);
+  console.log();
+
+  // Optional: model override
+  const model = await askInput(
+    "Claude model (leave empty for default)",
+    existingEnv.CLAUDE_MODEL ?? "",
+  );
+  if (model) envVars.CLAUDE_MODEL = model;
+
+  // Optional: project directory
+  const projectDir = await askInput(
+    "Default project directory (leave empty for current dir)",
+    existingEnv.CLAUDE_PROJECT_DIR ?? "",
+  );
+  if (projectDir) envVars.CLAUDE_PROJECT_DIR = projectDir;
+
+  return envVars;
+}
+
+// ---------------------------------------------------------------------------
 // Step 6 - Generate .env
 // ---------------------------------------------------------------------------
 
 const ENV_SECTION_ORDER: Array<[string, string[]]> = [
+  ["Claude Settings", ["CLAUDE_ALLOWED_TOOLS", "CLAUDE_MODEL", "CLAUDE_PROJECT_DIR"]],
   ["Telegram Bot", ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"]],
   ["Discord Bot", ["DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USERS"]],
 ];
@@ -770,6 +850,10 @@ async function main(): Promise<void> {
 
     // 5. Per-module config
     const envVars = await stepModuleConfig(selected, existingEnv);
+
+    // 5b. Claude permissions & settings
+    const claudeVars = await stepClaudeSettings(existingEnv);
+    Object.assign(envVars, claudeVars);
 
     // 6. Generate .env
     await stepGenerateEnv(envVars);
