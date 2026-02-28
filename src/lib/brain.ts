@@ -97,7 +97,8 @@ export class Brain {
 
     if (newContent === this.content) {
       // Section didn't exist — check if heading is truly absent
-      if (!this.getSection(heading)) {
+      const headingPattern = new RegExp(`^## ${escaped}`, "m");
+      if (!this.getSection(heading) && !headingPattern.test(this.content)) {
         this.content = this.content.trimEnd() + `\n\n## ${heading}\n${content}\n`;
       }
     } else {
@@ -121,7 +122,7 @@ export class Brain {
     withFileLockSync(this.path, () => {
       this.reload();
       const history = this.getSection("Recent History");
-      const lines = history.split("\n").filter((l) => l.trim());
+      const lines = history.split("\n").filter((l) => l.startsWith("- "));
       lines.unshift(entry);
       const trimmed = lines.slice(0, MAX_EVENTS);
       this.applySectionUpdate("Recent History", trimmed.join("\n"));
