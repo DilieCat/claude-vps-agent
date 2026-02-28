@@ -112,6 +112,12 @@ export class ClaudeBridge {
     this.workspaceDir = options.workspaceDir
       ?? process.env["CLAUDE_WORKSPACE_DIR"]
       ?? path.join(os.homedir(), ".claude-agent", "workspace");
+
+    // Ensure workspace directory exists (defensive — setup wizard normally creates it)
+    if (!fs.existsSync(this.workspaceDir)) {
+      fs.mkdirSync(this.workspaceDir, { recursive: true });
+    }
+
     this.model = options.model ?? process.env["CLAUDE_MODEL"];
 
     if (options.allowedTools) {
