@@ -708,6 +708,15 @@ async function stepInstallDeps(): Promise<void> {
   const result = runCmd(["npm", "install"], 120000);
   if (result.code === 0) {
     ok("All dependencies installed");
+
+    // Register claudebridge command globally
+    info("Registering claudebridge command...");
+    const linkResult = runCmd(["npm", "link"], 30000);
+    if (linkResult.code === 0) {
+      ok("'claudebridge' command registered (available system-wide)");
+    } else {
+      warn("Could not register 'claudebridge' globally — use 'npx claudebridge' instead");
+    }
   } else {
     fail("Dependency installation failed");
     if (result.stderr) {
@@ -811,19 +820,26 @@ function stepSummary(selected: string[]): void {
   }
   console.log();
 
-  info("To start services manually:");
+  info("Quick start:");
+  console.log();
+  info("  claudebridge start             # Start all services");
+  info("  claudebridge stop              # Stop all services");
+  info("  claudebridge status            # Show running services");
+  info("  claudebridge logs              # View service logs");
+  console.log();
+  info("Start individual services:");
   console.log();
   if (selected.includes("telegram")) {
-    info("  make telegram      # Start the Telegram bot");
+    info("  claudebridge start telegram    # Start only Telegram bot");
   }
   if (selected.includes("discord")) {
-    info("  make discord       # Start the Discord bot");
+    info("  claudebridge start discord     # Start only Discord bot");
   }
   if (selected.includes("scheduler")) {
-    info("  make scheduler     # Start the task scheduler");
+    info("  claudebridge start scheduler   # Start only scheduler");
   }
   console.log();
-  info("Re-run this wizard any time with:  npx tsx setup.ts");
+  info("Re-run this wizard:  claudebridge setup");
   console.log();
 }
 
