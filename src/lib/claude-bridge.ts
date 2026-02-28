@@ -191,12 +191,16 @@ export class ClaudeBridge {
     const cmd = this.buildCommand(prompt, resumeSession);
     const [bin, ...args] = cmd;
 
+    const env = { ...process.env };
+    delete env["CLAUDECODE"];
+
     try {
       const result = spawnSync(bin, args, {
         cwd: this.workspaceDir,
         encoding: "utf-8",
         timeout: this.timeoutSeconds * 1000,
         maxBuffer: 10 * 1024 * 1024,
+        env,
       });
 
       if (result.error) {
@@ -228,12 +232,16 @@ export class ClaudeBridge {
     const cmd = this.buildCommand(prompt, resumeSession);
     const [bin, ...args] = cmd;
 
+    const env = { ...process.env };
+    delete env["CLAUDECODE"];
+
     return new Promise<ClaudeResponse>((resolve) => {
       let proc;
       try {
         proc = spawn(bin, args, {
           cwd: this.workspaceDir,
           stdio: ["ignore", "pipe", "pipe"],
+          env,
         });
       } catch {
         resolve(
