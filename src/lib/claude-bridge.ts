@@ -150,7 +150,8 @@ export class ClaudeBridge {
     // Append system prompt with agent personality if available
     const systemPromptFile = path.join(this.projectDir, "data", "system-prompt.md");
     if (fs.existsSync(systemPromptFile)) {
-      cmd.push("--append-system-prompt-file", systemPromptFile);
+      const systemPrompt = fs.readFileSync(systemPromptFile, "utf-8");
+      cmd.push("--append-system-prompt", systemPrompt);
     }
 
     return cmd;

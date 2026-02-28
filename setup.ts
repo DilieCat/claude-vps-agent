@@ -542,12 +542,22 @@ async function stepAgentIdentity(): Promise<void> {
 
   // Generate data/system-prompt.md from template
   const templatePath = path.join(PROJECT_ROOT, "data", "system-prompt.template.md");
+  const outPath = path.join(PROJECT_ROOT, "data", "system-prompt.md");
   if (fs.existsSync(templatePath)) {
-    const template = fs.readFileSync(templatePath, "utf-8");
-    const content = template.replace(/\{AGENT_NAME\}/g, agentName);
-    const outPath = path.join(PROJECT_ROOT, "data", "system-prompt.md");
-    fs.writeFileSync(outPath, content, "utf-8");
-    ok(`System prompt written with agent name: ${agentName}`);
+    let shouldWrite = true;
+    if (fs.existsSync(outPath)) {
+      console.log();
+      warn("Existing system-prompt.md detected.");
+      shouldWrite = await askYesNo("  Overwrite with new agent name?", false);
+    }
+    if (shouldWrite) {
+      const template = fs.readFileSync(templatePath, "utf-8");
+      const content = template.replace(/\{AGENT_NAME\}/g, agentName);
+      fs.writeFileSync(outPath, content, "utf-8");
+      ok(`System prompt written with agent name: ${agentName}`);
+    } else {
+      info("Keeping existing system-prompt.md.");
+    }
   } else {
     warn("Template data/system-prompt.template.md not found — skipping.");
   }
@@ -904,23 +914,23 @@ async function main(): Promise<void> {
     // 5. Per-module config
     const envVars = await stepModuleConfig(selected, existingEnv);
 
-    // 5b. Agent identity (name + system prompt)
+    // 6. Agent identity (name + system prompt)
     await stepAgentIdentity();
 
-    // 5c. Claude permissions & settings
+    // 7. Claude permissions & settings
     const claudeVars = await stepClaudeSettings(existingEnv);
     Object.assign(envVars, claudeVars);
 
-    // 7. Generate .env
+    // 8. Generate .env
     await stepGenerateEnv(envVars);
 
-    // 8. Install dependencies (npm install)
+    // 9. Install dependencies (npm install)
     await stepInstallDeps();
 
-    // 9. Optionally install systemd services (Linux only)
+    // 10. Optionally install systemd services (Linux only)
     await stepSystemdServices(selected);
 
-    // 10. Summary
+    // 11. Summary
     stepSummary(selected);
   } catch (e) {
     if (e instanceof Error && e.message.includes("readline was closed")) {
