@@ -1,4 +1,4 @@
-.PHONY: help install setup-vps deploy telegram discord scheduler stop-all status
+.PHONY: help setup install setup-vps deploy telegram discord scheduler stop-all status
 
 SHELL := /bin/bash
 ENV_FILE := .env
@@ -8,6 +8,9 @@ VPS_USER ?= $(shell grep VPS_USER $(ENV_FILE) 2>/dev/null | cut -d= -f2)
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+setup: ## Run interactive setup wizard
+	python3 setup.py
 
 install: ## Install all Python dependencies locally
 	python3 -m venv .venv
@@ -28,7 +31,8 @@ deploy: ## Deploy project to VPS
 	bash scripts/deploy.sh
 
 auth: ## Authenticate Claude Code on VPS via SSH tunnel
-	bash scripts/auth-helper.sh
+	@test -n "$(VPS_HOST)" || (echo "Error: VPS_HOST not set. Check .env" && exit 1)
+	bash scripts/auth-helper.sh $(VPS_USER)@$(VPS_HOST)
 
 telegram: ## Run Telegram bot locally
 	.venv/bin/python bots/telegram/bot.py
@@ -44,15 +48,15 @@ scheduler-once: ## Run scheduler one-shot (check and run due tasks)
 
 status: ## Check status of services on VPS
 	@test -n "$(VPS_HOST)" || (echo "Error: VPS_HOST not set. Check .env" && exit 1)
-	ssh $(VPS_USER)@$(VPS_HOST) 'systemctl status telegram-bot discord-bot claude-scheduler --no-pager' || true
+	ssh $(VPS_USER)@$(VPS_HOST) 'systemctl status telegram-bot discord-bot scheduler --no-pager' || true
 
 stop-all: ## Stop all services on VPS
 	@test -n "$(VPS_HOST)" || (echo "Error: VPS_HOST not set. Check .env" && exit 1)
-	ssh $(VPS_USER)@$(VPS_HOST) 'sudo systemctl stop telegram-bot discord-bot claude-scheduler'
+	ssh $(VPS_USER)@$(VPS_HOST) 'sudo systemctl stop telegram-bot discord-bot scheduler'
 
 logs: ## Tail logs from VPS services
 	@test -n "$(VPS_HOST)" || (echo "Error: VPS_HOST not set. Check .env" && exit 1)
-	ssh $(VPS_USER)@$(VPS_HOST) 'sudo journalctl -u telegram-bot -u discord-bot -u claude-scheduler -f --no-pager'
+	ssh $(VPS_USER)@$(VPS_HOST) 'sudo journalctl -u telegram-bot -u discord-bot -u scheduler -f --no-pager'
 
 lint: ## Run linting on Python code
 	.venv/bin/python -m py_compile lib/claude_bridge.py

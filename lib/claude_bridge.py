@@ -38,13 +38,15 @@ class ClaudeResponse:
 class ClaudeBridge:
     """Wrapper around the `claude -p` CLI for programmatic access."""
 
+    _DEFAULT_TIMEOUT = 300
+
     def __init__(
         self,
         project_dir: str | None = None,
         model: str | None = None,
         allowed_tools: list[str] | None = None,
         max_budget_usd: float | None = None,
-        timeout_seconds: int = 300,
+        timeout_seconds: int | None = None,
     ):
         self.project_dir = project_dir or os.getcwd()
         self.model = model or os.getenv("CLAUDE_MODEL")
@@ -52,8 +54,16 @@ class ClaudeBridge:
             "CLAUDE_ALLOWED_TOOLS", ""
         ).split(",")
         self.allowed_tools = [t.strip() for t in self.allowed_tools if t.strip()]
-        self.max_budget_usd = max_budget_usd
-        self.timeout_seconds = timeout_seconds
+        if max_budget_usd is not None:
+            self.max_budget_usd = max_budget_usd
+        else:
+            env_budget = os.getenv("CLAUDE_MAX_BUDGET_USD")
+            self.max_budget_usd = float(env_budget) if env_budget else None
+        if timeout_seconds is not None:
+            self.timeout_seconds = timeout_seconds
+        else:
+            env_timeout = os.getenv("CLAUDE_TIMEOUT_SECONDS")
+            self.timeout_seconds = int(env_timeout) if env_timeout else self._DEFAULT_TIMEOUT
 
     def _build_command(self, prompt: str) -> list[str]:
         """Build the claude CLI command."""

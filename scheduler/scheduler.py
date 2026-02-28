@@ -34,7 +34,7 @@ from croniter import croniter
 from dotenv import load_dotenv
 
 # Import ClaudeBridge from project lib
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from lib.claude_bridge import ClaudeBridge
 
 # ---------------------------------------------------------------------------

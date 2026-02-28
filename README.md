@@ -34,9 +34,16 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 ```bash
 git clone https://github.com/yourusername/claude-vps-agent.git
 cd claude-vps-agent
+
+# Option A: Interactive setup wizard (recommended)
+make setup            # or: python3 setup.py
+
+# Option B: Manual configuration
 cp .env.example .env
 # Edit .env with your tokens and VPS details
 ```
+
+The setup wizard walks you through module selection, token configuration, dependency installation, and verification -- all in one step.
 
 ### 2. Local development
 
