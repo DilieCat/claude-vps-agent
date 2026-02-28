@@ -401,39 +401,43 @@ function main(): void {
   // ---------------------------------------------------------------------------
   if (livingMode && notificationQueue) {
     setInterval(async () => {
-      if (!notificationQueue) return;
+      try {
+        if (!notificationQueue) return;
 
-      const pending: Notification[] = notificationQueue.popAll("telegram");
-      if (pending.length === 0) return;
+        const pending: Notification[] = notificationQueue.popAll("telegram");
+        if (pending.length === 0) return;
 
-      const prefs = loadNotifyPrefs();
-      const optedIn = Object.entries(prefs)
-        .filter(([, enabled]) => enabled)
-        .map(([uid]) => uid);
+        const prefs = loadNotifyPrefs();
+        const optedIn = Object.entries(prefs)
+          .filter(([, enabled]) => enabled)
+          .map(([uid]) => uid);
 
-      for (const note of pending) {
-        const message = note.message;
-        if (!message) continue;
+        for (const note of pending) {
+          const message = note.message;
+          if (!message) continue;
 
-        // Determine recipients: specific user or all opted-in (broadcast)
-        let recipients: string[];
-        if (note.user_id !== null) {
-          recipients = prefs[note.user_id] ? [note.user_id] : [];
-        } else {
-          recipients = optedIn;
-        }
+          // Determine recipients: specific user or all opted-in (broadcast)
+          let recipients: string[];
+          if (note.user_id !== null) {
+            recipients = prefs[note.user_id] ? [note.user_id] : [];
+          } else {
+            recipients = optedIn;
+          }
 
-        for (const recipient of recipients) {
-          try {
-            await bot.telegram.sendMessage(
-              Number(recipient),
-              `[Notification]\n${message}`
-            );
-            console.log(`Sent notification to user ${recipient}`);
-          } catch (err) {
-            console.error(`Failed to send notification to user ${recipient}:`, err);
+          for (const recipient of recipients) {
+            try {
+              await bot.telegram.sendMessage(
+                Number(recipient),
+                `[Notification]\n${message}`
+              );
+              console.log(`Sent notification to user ${recipient}`);
+            } catch (err) {
+              console.error(`Failed to send notification to user ${recipient}:`, err);
+            }
           }
         }
+      } catch (err) {
+        console.error("Notification poller error:", err);
       }
     }, NOTIFICATION_CHECK_INTERVAL);
     console.log(`Notification check scheduled every ${NOTIFICATION_CHECK_INTERVAL / 1000}s`);
