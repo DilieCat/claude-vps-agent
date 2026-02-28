@@ -14,6 +14,9 @@ import {
   ClaudeBridge,
   LivingBridge,
   NotificationQueue,
+  splitMessage,
+  loadNotifyPrefs,
+  saveNotifyPrefs,
 } from "../lib/index.js";
 import type { ClaudeResponse, Notification } from "../lib/index.js";
 
@@ -90,35 +93,12 @@ if (livingMode) {
 // ---------------------------------------------------------------------------
 // Notification preferences helpers
 // ---------------------------------------------------------------------------
-function loadNotifyPrefs(): Record<string, boolean> {
-  const dir = path.dirname(NOTIFY_PREFS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (fs.existsSync(NOTIFY_PREFS_PATH)) {
-    try {
-      return JSON.parse(fs.readFileSync(NOTIFY_PREFS_PATH, "utf-8")) as Record<string, boolean>;
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-function saveNotifyPrefs(prefs: Record<string, boolean>): void {
-  const dir = path.dirname(NOTIFY_PREFS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(NOTIFY_PREFS_PATH, JSON.stringify(prefs, null, 2));
-}
-
 function toggleNotify(userId: number): boolean {
-  const prefs = loadNotifyPrefs();
+  const prefs = loadNotifyPrefs(NOTIFY_PREFS_PATH);
   const key = String(userId);
   const newState = !prefs[key];
   prefs[key] = newState;
-  saveNotifyPrefs(prefs);
+  saveNotifyPrefs(NOTIFY_PREFS_PATH, prefs);
   return newState;
 }
 
@@ -158,32 +138,8 @@ function getUserBridge(userId: number): ClaudeBridge {
   return overridden;
 }
 
-function splitMessage(text: string, limit: number = TELEGRAM_MAX_LEN): string[] {
-  if (text.length <= limit) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining) {
-    if (remaining.length <= limit) {
-      chunks.push(remaining);
-      break;
-    }
-
-    let splitAt = remaining.lastIndexOf("\n", limit);
-    if (splitAt <= 0) {
-      splitAt = limit;
-    }
-
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
-  }
-
-  return chunks;
-}
-
 async function sendLong(ctx: Context, text: string): Promise<void> {
-  for (const chunk of splitMessage(text)) {
+  for (const chunk of splitMessage(text, TELEGRAM_MAX_LEN)) {
     await ctx.reply(chunk);
   }
 }
@@ -407,7 +363,7 @@ function main(): void {
         const pending: Notification[] = notificationQueue.popAll("telegram");
         if (pending.length === 0) return;
 
-        const prefs = loadNotifyPrefs();
+        const prefs = loadNotifyPrefs(NOTIFY_PREFS_PATH);
         const optedIn = Object.entries(prefs)
           .filter(([, enabled]) => enabled)
           .map(([uid]) => uid);

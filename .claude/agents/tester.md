@@ -10,11 +10,9 @@ You are a QA engineer for the claude-vps-agent project.
 
 ## Test protocol
 
-### 1. Python syntax (all .py files)
+### 1. TypeScript compilation (all .ts files)
 ```bash
-find . -name "*.py" -not -path "./.venv/*" | while read f; do
-  python3 -m py_compile "$f" && echo "OK: $f" || echo "FAIL: $f"
-done
+npx tsc --noEmit
 ```
 
 ### 2. Shell script syntax (all .sh files)
@@ -25,10 +23,10 @@ done
 ```
 
 ### 3. Import validation
-For each Python module, verify:
-- `sys.path.insert` points to the correct relative directory
-- All imports resolve (check file existence)
-- Type hints use Python 3.10+ syntax (`str | None`, not `Optional[str]`)
+For each TypeScript module, verify:
+- All imports resolve (check file existence and barrel exports in `src/lib/index.ts`)
+- Import paths use `.js` extension (required for ESM)
+- Types are correctly exported
 
 ### 4. Cross-module consistency
 - All env var names in bot code match `.env.example`
