@@ -103,6 +103,20 @@ if (livingMode) {
 const NOTIFY_PREFS_PATH = path.join(PROJECT_ROOT, "data", "discord_notify_prefs.json");
 
 // ---------------------------------------------------------------------------
+// Respond prefs (persisted to disk)
+// ---------------------------------------------------------------------------
+const RESPOND_PREFS_PATH = path.join(PROJECT_ROOT, "data", "discord_respond_prefs.json");
+
+function loadRespondPrefs(): Record<string, string> {
+  try { return JSON.parse(fs.readFileSync(RESPOND_PREFS_PATH, "utf-8")); }
+  catch { return {}; }
+}
+function saveRespondPrefs(prefs: Record<string, string>): void {
+  fs.mkdirSync(path.dirname(RESPOND_PREFS_PATH), { recursive: true });
+  fs.writeFileSync(RESPOND_PREFS_PATH, JSON.stringify(prefs, null, 2));
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -177,6 +191,17 @@ const commands = [
     .setName("model")
     .setDescription("View or change the Claude model")
     .addStringOption((opt) => opt.setName("name").setDescription("Model name (leave empty to view current)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("respond")
+    .setDescription("Set how the bot responds to your messages")
+    .addStringOption((opt) =>
+      opt.setName("mode")
+        .setDescription("Response mode")
+        .setRequired(true)
+        .addChoices(
+          { name: "all — respond to all my messages", value: "all" },
+          { name: "mentions — only respond when @mentioned", value: "mentions" },
+        )),
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("Show help for the Claude Discord bot"),
@@ -412,6 +437,16 @@ client.on("interactionCreate", async (interaction) => {
       const current = userBridge.model ?? "(default)";
       await interaction.reply(`Current model: \`${current}\``);
     }
+  } else if (commandName === "respond") {
+    const mode = interaction.options.getString("mode", true);
+    const prefs = loadRespondPrefs();
+    prefs[userId] = mode;
+    saveRespondPrefs(prefs);
+    if (mode === "all") {
+      await interaction.reply({ content: "I'll now respond to **all** your messages in channels I can see. Use `/respond mentions` to switch back.", ephemeral: true });
+    } else {
+      await interaction.reply({ content: "I'll only respond when you **@mention** me. Use `/respond all` to change.", ephemeral: true });
+    }
   } else if (commandName === "help") {
     const modeLabel = livingMode ? "living agent" : "stateless";
     let helpText =
@@ -423,6 +458,7 @@ client.on("interactionCreate", async (interaction) => {
       "`/notify` — Toggle proactive notifications on/off\n" +
       "`/project [path]` — View or change the active project directory\n" +
       "`/model [name]` — View or change the Claude model\n" +
+      "`/respond <mode>` — Set response mode: `all` (respond to all messages) or `mentions` (only when @mentioned)\n" +
       "`/help` — Show this help message\n\n" +
       "**Notes:**\n" +
       "- Each `/ask` creates a new thread for the conversation.\n" +
@@ -455,7 +491,10 @@ client.on("messageCreate", async (message) => {
     message.channel.isThread() &&
     message.channel.ownerId === client.user?.id;
 
-  if (!isDM && !isMentioned && !isInBotThread) return;
+  const respondPrefs = loadRespondPrefs();
+  const userRespondMode = respondPrefs[message.author.id] ?? "mentions";
+  const shouldRespond = isDM || isInBotThread || isMentioned || userRespondMode === "all";
+  if (!shouldRespond) return;
 
   // Authorization check
   const userId = message.author.id;

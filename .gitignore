@@ -11,4 +11,5 @@ dist/
 logs/
 *.log
 data/brain.md
+data/discord_respond_prefs.json
 .DS_Store
