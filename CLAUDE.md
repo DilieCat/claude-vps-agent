@@ -62,6 +62,19 @@ claude -p "your prompt" --max-budget-usd 0.50
 
 JSON output format returns: `{"type":"result","subtype":"success","cost_usd":0.01,"duration_ms":1234,"duration_api_ms":1100,"is_error":false,"num_turns":1,"result":"response text","session_id":"..."}`
 
+## Git Workflow
+
+- **Never push directly to main.** All changes go through pull requests.
+- For each feature or bugfix:
+  1. Create a branch from main: `git checkout -b fix/issue-description`
+  2. Make changes, commit with descriptive message
+  3. Push branch and create a PR via `gh pr create`
+  4. PR must be reviewed before merging
+  5. Merge via GitHub (squash or merge commit)
+- GitHub Issues track all bugs, features, and tasks
+- Reference issues in PR descriptions: `Fixes #123`
+- Labels: `critical`, `bug`, `enhancement`, `documentation`, `security`
+
 ## Important
 
 - NEVER hardcode API keys or tokens
