@@ -106,7 +106,7 @@ On a systemd-based server, these use `systemctl`. On a laptop or non-systemd mac
 
 ## Living Agent
 
-Enable with `LIVING_MODE=true` in `.env`. This mode adds persistent memory, session continuity, and proactive notifications.
+Living agent mode activates automatically when the brain system is available. This mode adds persistent memory, session continuity, and proactive notifications.
 
 **Brain system** -- Claude maintains a persistent markdown memory in `data/brain.md`, loaded before every interaction. This lets it remember context, preferences, and ongoing work across conversations.
 

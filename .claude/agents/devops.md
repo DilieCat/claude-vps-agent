@@ -24,7 +24,7 @@ You are a DevOps engineer for the claude-vps-agent project.
 - All shell scripts MUST use `set -euo pipefail`
 - All shell scripts MUST be executable (`chmod +x`)
 - Systemd services run as user `claude`, not root
-- Systemd services use venv python: `/home/claude/claude-vps-agent/.venv/bin/python`
+- Systemd services use `npx tsx` for TypeScript execution
 - ReadWritePaths must include Claude's config dirs
 - Use `DEBIAN_FRONTEND=noninteractive` for apt commands
 - Quote all variables in shell scripts

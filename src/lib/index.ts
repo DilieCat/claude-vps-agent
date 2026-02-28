@@ -9,3 +9,5 @@ export { NotificationQueue } from "./notifier.js";
 export type { Notification } from "./notifier.js";
 export { ClaudeBridge, LivingBridge } from "./claude-bridge.js";
 export type { ClaudeResponse } from "./claude-bridge.js";
+export { splitMessage } from "./message-utils.js";
+export { loadNotifyPrefs, saveNotifyPrefs } from "./notify-prefs.js";

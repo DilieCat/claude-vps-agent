@@ -21,7 +21,7 @@ import {
   type ChatInputCommandInteraction,
   type TextChannel,
 } from "discord.js";
-import { ClaudeBridge, LivingBridge, NotificationQueue } from "../lib/index.js";
+import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs } from "../lib/index.js";
 import type { Notification } from "../lib/index.js";
 
 // ---------------------------------------------------------------------------
@@ -100,29 +100,6 @@ if (livingMode) {
 // ---------------------------------------------------------------------------
 const NOTIFY_PREFS_PATH = path.join(PROJECT_ROOT, "data", "discord_notify_prefs.json");
 
-function loadNotifyPrefs(): Record<string, boolean> {
-  const dir = path.dirname(NOTIFY_PREFS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (fs.existsSync(NOTIFY_PREFS_PATH)) {
-    try {
-      return JSON.parse(fs.readFileSync(NOTIFY_PREFS_PATH, "utf-8")) as Record<string, boolean>;
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-function saveNotifyPrefs(prefs: Record<string, boolean>): void {
-  const dir = path.dirname(NOTIFY_PREFS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(NOTIFY_PREFS_PATH, JSON.stringify(prefs, null, 2));
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -159,34 +136,6 @@ function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
   }
 
   return overridden;
-}
-
-function splitMessage(text: string, limit: number = DISCORD_MAX_LEN): string[] {
-  if (text.length <= limit) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= limit) {
-      chunks.push(remaining);
-      break;
-    }
-
-    // Try to find a good split point
-    let splitAt = remaining.lastIndexOf("\n", limit);
-    if (splitAt === -1 || splitAt < limit / 2) {
-      splitAt = remaining.lastIndexOf(" ", limit);
-    }
-    if (splitAt === -1 || splitAt < limit / 2) {
-      splitAt = limit;
-    }
-
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
-  }
-
-  return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +223,7 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
   }
 
   // Send the response, splitting if necessary
-  const chunks = splitMessage(response.text);
+  const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
   for (const chunk of chunks) {
     await target.send(chunk);
   }
@@ -298,7 +247,7 @@ function startNotificationPoller(): ReturnType<typeof setInterval> | null {
       const notifications: Notification[] = notificationQueue!.popAll("discord");
       if (notifications.length === 0) return;
 
-      const prefs = loadNotifyPrefs();
+      const prefs = loadNotifyPrefs(NOTIFY_PREFS_PATH);
       const optedIn = Object.entries(prefs)
         .filter(([, enabled]) => enabled)
         .map(([uid]) => uid);
@@ -392,10 +341,10 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply({ content: "Notifications are not available.", ephemeral: true });
       return;
     }
-    const prefs = loadNotifyPrefs();
+    const prefs = loadNotifyPrefs(NOTIFY_PREFS_PATH);
     const newState = !prefs[userId];
     prefs[userId] = newState;
-    saveNotifyPrefs(prefs);
+    saveNotifyPrefs(NOTIFY_PREFS_PATH, prefs);
 
     if (newState) {
       await interaction.reply({

@@ -18,7 +18,7 @@ You will receive a PR number or branch name. Your job is to review it thoroughly
 1. **Get PR context** — Run `gh pr view <number>` and `gh pr diff <number>`
 2. **Read changed files** — Understand every change
 3. **Check against CLAUDE.md** — Verify conventions are followed
-4. **Run checks** — `python3 -m py_compile` on changed Python files, `bash -n` on shell scripts
+4. **Run checks** — `npx tsc --noEmit` on changed `.ts` files, `bash -n` on shell scripts
 
 ## Review checklist
 
@@ -35,9 +35,9 @@ You will receive a PR number or branch name. Your job is to review it thoroughly
 - [ ] No sensitive data in logs
 
 ### Project conventions
-- [ ] Uses `lib/claude_bridge.py` (never raw `claude -p`)
-- [ ] Config via env vars + python-dotenv
-- [ ] Python 3.10+ type hints
+- [ ] Uses `src/lib/claude-bridge.ts` (never raw `claude -p`)
+- [ ] Config via env vars + dotenv
+- [ ] TypeScript strict mode
 - [ ] Files only modified within scope (bot agents stay in their dir)
 
 ### Consistency
