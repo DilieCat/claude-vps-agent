@@ -44,7 +44,9 @@ scheduler-once: ## Run scheduler one-shot (check and run due tasks)
 # Service management (works with systemd or local processes)
 # ---------------------------------------------------------------------------
 
-start: ## Start all enabled services
+start: ## Start all enabled services (stops existing ones first)
+	@$(MAKE) stop --no-print-directory 2>/dev/null || true
+	@mkdir -p .pids
 	@if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then \
 		echo "Starting services via systemd..."; \
 		for svc in $(SERVICES); do \
@@ -58,13 +60,13 @@ start: ## Start all enabled services
 		echo "Starting services as background processes..."; \
 		echo "(Use 'make stop' to stop them later)"; \
 		if [ -f src/bots/telegram.ts ]; then \
-			npx tsx src/bots/telegram.ts & echo "  telegram-bot: started (PID $$!)"; \
+			npx tsx src/bots/telegram.ts & echo $$! > .pids/telegram-bot.pid; echo "  telegram-bot: started (PID $$!)"; \
 		fi; \
 		if [ -f src/bots/discord.ts ]; then \
-			npx tsx src/bots/discord.ts & echo "  discord-bot: started (PID $$!)"; \
+			npx tsx src/bots/discord.ts & echo $$! > .pids/discord-bot.pid; echo "  discord-bot: started (PID $$!)"; \
 		fi; \
 		if [ -f src/scheduler.ts ]; then \
-			npx tsx src/scheduler.ts & echo "  scheduler: started (PID $$!)"; \
+			npx tsx src/scheduler.ts & echo $$! > .pids/scheduler.pid; echo "  scheduler: started (PID $$!)"; \
 		fi; \
 	fi
 
@@ -79,6 +81,7 @@ stop: ## Stop all services
 		pkill -f 'src/bots/telegram.ts' 2>/dev/null && echo "  telegram-bot: stopped" || echo "  telegram-bot: not running"; \
 		pkill -f 'src/bots/discord.ts' 2>/dev/null && echo "  discord-bot: stopped" || echo "  discord-bot: not running"; \
 		pkill -f 'src/scheduler.ts' 2>/dev/null && echo "  scheduler: stopped" || echo "  scheduler: not running"; \
+		rm -f .pids/*.pid 2>/dev/null; \
 	fi
 
 restart: ## Restart all services

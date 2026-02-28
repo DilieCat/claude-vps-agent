@@ -34,22 +34,33 @@ function findClaudeBinary(): string {
     "/usr/bin/claude",
     path.join(process.env["HOME"] ?? "", ".npm-global", "bin", "claude"),
     path.join(process.env["HOME"] ?? "", ".local", "bin", "claude"),
-    // nvm locations
-    ...(process.env["NVM_DIR"]
-      ? [path.join(process.env["NVM_DIR"], "versions", "node", "*", "bin", "claude")]
-      : []),
   ];
 
+  // 4. Scan nvm node versions for claude binary
+  const nvmDir = process.env["NVM_DIR"] ?? path.join(process.env["HOME"] ?? "", ".nvm");
+  const nvmVersionsDir = path.join(nvmDir, "versions", "node");
+  try {
+    if (fs.existsSync(nvmVersionsDir)) {
+      for (const ver of fs.readdirSync(nvmVersionsDir)) {
+        candidates.push(path.join(nvmVersionsDir, ver, "bin", "claude"));
+      }
+    }
+  } catch { /* nvm dir not readable */ }
+
   for (const candidate of candidates) {
-    if (candidate.includes("*")) continue; // skip globs
     if (fs.existsSync(candidate)) return candidate;
   }
 
-  // 4. Fallback: just "claude" and hope for the best
+  // 5. Fallback: just "claude" and hope for the best
   return "claude";
 }
 
 const CLAUDE_BIN = findClaudeBinary();
+if (CLAUDE_BIN === "claude") {
+  console.warn("[claude-bridge] Warning: could not resolve full path to claude CLI. Set CLAUDE_BIN env var if claude is installed in a non-standard location.");
+} else {
+  console.log(`[claude-bridge] Using claude binary: ${CLAUDE_BIN}`);
+}
 
 /** Structured response from a `claude -p` invocation. */
 export interface ClaudeResponse {
