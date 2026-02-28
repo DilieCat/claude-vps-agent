@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S npx tsx
 /**
  * claudebridge CLI — process manager for Claude Code bot services.
  *

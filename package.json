@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "bin": {
+    "claudebridge": "./src/cli.ts"
+  },
   "scripts": {
     "build": "tsc",
     "start": "tsx src/cli.ts start",
