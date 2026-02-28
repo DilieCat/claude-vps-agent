@@ -24,6 +24,9 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 | **Discord Bot** | Slash commands (`/ask`, `/project`, `/model`). Thread-per-conversation. |
 | **Scheduler** | YAML-based cron tasks. Daily code reviews, dependency checks, custom prompts. |
 | **Living Agent** | Persistent memory (brain system), session continuity, proactive notifications. |
+| **Agent Personality** | Give your agent a name and persona. First-interaction onboarding collects user preferences. |
+| **Workspace Isolation** | Agent runs from `~/.claude-agent/workspace/` -- keeps your developer CLAUDE.md separate from the agent's identity. |
+| **claudebridge CLI** | Process manager: start, stop, restart, status, and logs for all services. |
 | **Infra** | Optional server provisioning script. SSH hardening, firewall, Fail2Ban, systemd services. |
 | **MCP Configs** | Pre-configured MCP servers for GitHub, filesystem, search, memory. |
 
@@ -36,15 +39,27 @@ npm install
 npx tsx setup.ts
 ```
 
-The setup wizard walks you through module selection, token configuration, dependency installation, and verification -- all in one step.
+The setup wizard walks you through:
+1. Module selection (Telegram, Discord, Scheduler)
+2. Token configuration
+3. Claude Code settings
+4. Dependency installation and verification
+5. **Agent identity** -- choose a name and persona for your agent
 
-That's it. Once setup is done, start your services:
+Once setup is done, a workspace is created at `~/.claude-agent/workspace/` and you can start your services:
 
 ```bash
-make telegram         # Run Telegram bot
-make discord          # Run Discord bot
-make scheduler        # Run scheduler
-make start            # Start all enabled services
+claudebridge start          # Start all enabled services
+claudebridge start telegram # Start only Telegram bot
+claudebridge status         # Check service status
+```
+
+Or with npm scripts:
+```bash
+npm start                   # Start all enabled services
+npm run telegram            # Run Telegram bot directly
+npm run discord             # Run Discord bot directly
+npm run scheduler           # Run scheduler directly
 ```
 
 ## Tech Stack
@@ -61,12 +76,17 @@ make start            # Start all enabled services
 ```
                        +----------------+     +-------------------+
   Telegram Bot ------->|                |---->|                   |
-                <------|  Claude Bridge |<----|  Claude Code CLI  |
-  Discord Bot -------->|                |---->|  (claude -p)      |
-                <------|  (src/lib/     |<----|                   |
-  Scheduler ---------->|   claude-      |---->|  Your project     |
-                <------|   bridge.ts)   |<----|  files             |
-                       +----------------+     +-------------------+
+                <------|  Claude Bridge |     |  Claude Code CLI  |
+  Discord Bot -------->|                |     |  (claude -p)      |
+                <------|  (src/lib/     |     |                   |
+  Scheduler ---------->|   claude-      |     |  Workspace dir    |
+                <------|   bridge.ts)   |     |  ~/.claude-agent/ |
+                       +----------------+     |   workspace/      |
+                              |               +-------------------+
+                       +------+-------+
+                       |  Brain       |
+                       |  (brain.md)  |
+                       +--------------+
 ```
 
 All integrations go through `src/lib/claude-bridge.ts`, which wraps `claude -p` with:
@@ -74,6 +94,7 @@ All integrations go through `src/lib/claude-bridge.ts`, which wraps `claude -p` 
 - Timeout handling
 - Error recovery
 - Async support for bot event loops
+- **Workspace isolation** -- `claude -p` runs from the agent workspace, not your project directory, so your developer CLAUDE.md files don't bleed into the agent's persona
 
 ## Configuration
 
@@ -89,8 +110,26 @@ All config is via environment variables. Run `npx tsx setup.ts` or see [`.env.ex
 | `CLAUDE_MODEL` | No | Model to use (default: system default) |
 | `CLAUDE_ALLOWED_TOOLS` | No | Comma-separated tool whitelist |
 | `CLAUDE_MAX_BUDGET_USD` | No | Max spend per request |
+| `CLAUDE_TIMEOUT_SECONDS` | No | Timeout per request in seconds (default: 300) |
+| `CLAUDE_BIN` | No | Full path to claude binary (auto-detected if not set) |
+| `CLAUDE_WORKSPACE_DIR` | No | Custom workspace path (default: `~/.claude-agent/workspace`) |
 
-## Service Management
+## claudebridge CLI
+
+`claudebridge` is the process manager installed with the package. It manages services as background processes with full process-group tracking, so start/stop work reliably even with nested `npx tsx` launchers.
+
+```bash
+claudebridge start   [telegram|discord|scheduler|all]  # Start services (default: all)
+claudebridge stop    [telegram|discord|scheduler|all]  # Stop services (default: all)
+claudebridge restart [telegram|discord|scheduler|all]  # Restart services
+claudebridge status                                    # Show status table with uptime
+claudebridge logs    [telegram|discord|scheduler]      # Tail log files
+claudebridge setup                                     # Re-run setup wizard
+```
+
+Logs are written to `logs/<service>.log`. PIDs are tracked in `.pids/`.
+
+## Service Management (Makefile / systemd)
 
 The Makefile auto-detects whether systemd is available and adapts accordingly:
 
@@ -115,6 +154,10 @@ Living agent mode activates automatically when the brain system is available. Th
 **LivingBridge** -- An enhanced `ClaudeBridge` that combines brain loading, session management, and event logging into a single interface. Each user gets their own bridge instance with independent `/project` and `/model` settings.
 
 **Notification queue** -- The scheduler can push proactive messages to bot users (e.g. task results, reminders). Users opt in/out with `/notify`.
+
+**Agent personality** -- During setup, you give the agent a name. This name is injected into the workspace CLAUDE.md at `~/.claude-agent/workspace/CLAUDE.md`, which defines the agent's persona and behavior. On first interaction with a new user, the agent introduces itself and asks for their preferences (language, interests, communication style), saving everything to its brain.
+
+**Workspace isolation** -- The agent's CLAUDE.md lives in `~/.claude-agent/workspace/`, separate from any developer CLAUDE.md files in your projects. This prevents project-specific instructions from leaking into the agent's chat persona. The workspace is created automatically by the setup wizard.
 
 **Bot commands:**
 
