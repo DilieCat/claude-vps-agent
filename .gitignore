@@ -8,5 +8,6 @@ dist/
 .claude/tasks/
 .claude/worktrees/
 .pids/
+logs/
 *.log
 .DS_Store
