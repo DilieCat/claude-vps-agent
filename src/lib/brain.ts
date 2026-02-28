@@ -166,14 +166,11 @@ const DEFAULT_TEMPLATE = `# Agent Brain
 
 ## Identity
 - Name: Atlas
-- Role: Personal AI agent
-- Platform: claude-vps-agent
-
-## Active Tasks
-No active tasks.
+- Role: Personal AI assistant
+- Platform: Chat bot (Discord/Telegram)
 
 ## User Preferences
-- Language: auto-detect
+(Not yet configured — will be set during first conversation)
 
 ## Learned Patterns
 No patterns learned yet.
