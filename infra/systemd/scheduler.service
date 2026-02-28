@@ -1,0 +1,27 @@
+[Unit]
+Description=Claude VPS Agent — Task Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claude
+Group=claude
+WorkingDirectory=/home/claude/claude-vps-agent
+EnvironmentFile=/home/claude/claude-vps-agent/.env
+Environment=PYTHONPATH=/home/claude/claude-vps-agent
+ExecStart=/home/claude/claude-vps-agent/.venv/bin/python /home/claude/claude-vps-agent/scheduler/scheduler.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-scheduler
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/claude/claude-vps-agent /home/claude/.config /home/claude/.claude /home/claude/projects
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

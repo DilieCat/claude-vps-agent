@@ -1,0 +1,72 @@
+# tasks.yaml — Scheduled task definitions for Claude Code scheduler
+#
+# Each task has:
+#   name:             Unique identifier for the task
+#   schedule:         Cron expression (minute hour day month weekday)
+#   prompt:           The prompt to send to Claude Code
+#   project_dir:      Working directory for Claude (default: CLAUDE_PROJECT_DIR env)
+#   allowed_tools:    Comma-separated tool list (default: CLAUDE_ALLOWED_TOOLS env)
+#   model:            Model override (default: CLAUDE_MODEL env)
+#   max_budget_usd:   Max spend per invocation (optional)
+#   timeout_seconds:  Timeout in seconds (default: 300)
+#   enabled:          true/false (default: true)
+
+tasks:
+  # ---- Daily code review ----
+  - name: daily-code-review
+    schedule: "0 9 * * 1-5"          # 9:00 AM, Mon–Fri
+    prompt: |
+      Review recent git commits from the last 24 hours.
+      Summarize what changed, flag any potential issues
+      (bugs, security concerns, missing tests), and suggest improvements.
+      Keep the summary concise.
+    allowed_tools: "Read,Bash,Glob,Grep"
+    timeout_seconds: 600
+    enabled: true
+
+  # ---- Weekly dependency audit ----
+  - name: weekly-dependency-check
+    schedule: "0 8 * * 1"            # 8:00 AM, Monday
+    prompt: |
+      Check for outdated dependencies in this project.
+      List any packages with available updates, noting which
+      are major vs minor/patch bumps. Flag any known
+      security vulnerabilities.
+    allowed_tools: "Read,Bash,Glob"
+    timeout_seconds: 300
+    enabled: true
+
+  # ---- Nightly test runner ----
+  - name: nightly-tests
+    schedule: "0 2 * * *"            # 2:00 AM, every day
+    prompt: |
+      Run the project's test suite and report results.
+      If any tests fail, provide a brief analysis of each
+      failure with the relevant error messages.
+    allowed_tools: "Read,Bash,Glob,Grep"
+    timeout_seconds: 900
+    enabled: false                   # Enable when tests are ready
+
+  # ---- Monthly cleanup ----
+  - name: monthly-cleanup-report
+    schedule: "0 10 1 * *"           # 10:00 AM, 1st of each month
+    prompt: |
+      Analyze this codebase for cleanup opportunities:
+      - Dead code or unused imports
+      - Large files that could be split
+      - TODO/FIXME/HACK comments older than 30 days
+      Provide a prioritized list of suggestions.
+    allowed_tools: "Read,Bash,Glob,Grep"
+    timeout_seconds: 600
+    enabled: true
+
+  # ---- Hourly health check (example) ----
+  - name: hourly-health-check
+    schedule: "0 * * * *"            # Every hour, on the hour
+    prompt: |
+      Check system health: disk usage, memory, running services.
+      Report anything unusual or concerning.
+    allowed_tools: "Bash"
+    max_budget_usd: 0.10
+    timeout_seconds: 120
+    enabled: false                   # Enable if needed

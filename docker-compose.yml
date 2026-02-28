@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python bots/telegram/bot.py
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - claude-config:/home/claude/.config/claude-code
+    profiles: ["telegram"]
+
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python bots/discord/bot.py
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - claude-config:/home/claude/.config/claude-code
+    profiles: ["discord"]
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python scheduler/scheduler.py
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - claude-config:/home/claude/.config/claude-code
+      - scheduler-logs:/app/scheduler/logs
+    profiles: ["scheduler"]
+
+volumes:
+  claude-config:
+  scheduler-logs:
