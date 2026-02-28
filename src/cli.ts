@@ -127,15 +127,28 @@ async function startService(service: ServiceKey): Promise<void> {
   const logPath = path.join(LOGS_DIR, `${service}.log`);
   const logFd = fs.openSync(logPath, "a");
 
-  const child = spawn("npx", ["tsx", scriptPath], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    cwd: ROOT,
-    env: { ...process.env },
-  });
+  let child;
+  try {
+    child = spawn("npx", ["tsx", scriptPath], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      cwd: ROOT,
+      env: { ...process.env },
+    });
+  } catch (err) {
+    fs.closeSync(logFd);
+    console.log(`  ${c.red}${def.name}${c.reset}: failed to spawn — ${err}`);
+    return;
+  }
+
+  if (!child.pid) {
+    fs.closeSync(logFd);
+    console.log(`  ${c.red}${def.name}${c.reset}: failed to start (no PID)`);
+    return;
+  }
 
   // child.pid is the PID of the new process-group leader (because detached)
-  const pgid = child.pid!;
+  const pgid = child.pid;
   fs.writeFileSync(pidFile(service), String(pgid));
   child.unref();
   fs.closeSync(logFd);
