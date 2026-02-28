@@ -1,10 +1,13 @@
 """
-Discord bot for Claude Code — relay messages to `claude -p` via ClaudeBridge.
+Discord bot for Claude Code — relay messages to Claude via LivingBridge (or ClaudeBridge fallback).
+
+Supports persistent sessions, brain memory, proactive notifications, and slash commands.
 
 Usage:
     python bot.py          # reads config from .env / environment
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -35,6 +38,7 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL")
 CLAUDE_ALLOWED_TOOLS = os.getenv("CLAUDE_ALLOWED_TOOLS", "")
 
 DISCORD_MAX_LEN = 2000  # Discord message character limit
+NOTIFICATION_POLL_INTERVAL = 60  # seconds between notification checks
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,14 +47,42 @@ logging.basicConfig(
 logger = logging.getLogger("discord_bot")
 
 # ---------------------------------------------------------------------------
-# Bridge instance
+# Bridge instance — try LivingBridge, fall back to ClaudeBridge
 # ---------------------------------------------------------------------------
 allowed_tools = [t.strip() for t in CLAUDE_ALLOWED_TOOLS.split(",") if t.strip()] or None
-bridge = ClaudeBridge(
-    project_dir=CLAUDE_PROJECT_DIR,
-    model=CLAUDE_MODEL,
-    allowed_tools=allowed_tools,
-)
+living_mode = False
+
+try:
+    from lib.claude_bridge import LivingBridge  # noqa: E402
+    bridge = LivingBridge(
+        project_dir=CLAUDE_PROJECT_DIR,
+        model=CLAUDE_MODEL,
+        allowed_tools=allowed_tools,
+    )
+    living_mode = True
+    logger.info("LivingBridge initialized — living agent mode active.")
+except Exception as exc:
+    logger.warning("LivingBridge init failed (%s), falling back to ClaudeBridge.", exc)
+    bridge = ClaudeBridge(
+        project_dir=CLAUDE_PROJECT_DIR,
+        model=CLAUDE_MODEL,
+        allowed_tools=allowed_tools,
+    )
+
+# ---------------------------------------------------------------------------
+# Notification queue (optional — only in living mode)
+# ---------------------------------------------------------------------------
+notification_queue = None
+if living_mode:
+    try:
+        from lib.notifier import NotificationQueue  # noqa: E402
+        notification_queue = NotificationQueue()
+        logger.info("NotificationQueue loaded.")
+    except Exception as exc:
+        logger.warning("NotificationQueue init failed (%s), notifications disabled.", exc)
+
+# Per-user notification toggle: set of user IDs that have opted in
+notify_opted_in: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # Bot setup
@@ -68,6 +100,11 @@ class ClaudeBot(discord.Client):
         await self.tree.sync()
         logger.info("Slash commands synced.")
 
+        # Start notification polling background task
+        if notification_queue is not None:
+            self.loop.create_task(_notification_poller())
+            logger.info("Notification poller started (every %ds).", NOTIFICATION_POLL_INTERVAL)
+
 
 bot = ClaudeBot()
 
@@ -83,10 +120,7 @@ def is_allowed(user: discord.User | discord.Member) -> bool:
 
 
 def split_message(text: str, limit: int = DISCORD_MAX_LEN) -> list[str]:
-    """Split a long message into chunks that fit within Discord's limit.
-
-    Tries to split on newlines first, then on spaces, and finally hard-cuts.
-    """
+    """Split a long message into chunks that fit within Discord's limit."""
     if len(text) <= limit:
         return [text]
 
@@ -111,6 +145,8 @@ def split_message(text: str, limit: int = DISCORD_MAX_LEN) -> list[str]:
 
 async def ask_claude(prompt: str, interaction: discord.Interaction) -> None:
     """Send a prompt to Claude and reply in the interaction's channel/thread."""
+    user_id = str(interaction.user.id)
+
     # Create a thread for the conversation if we're not already in one
     channel = interaction.channel
     if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
@@ -128,7 +164,10 @@ async def ask_claude(prompt: str, interaction: discord.Interaction) -> None:
 
     # Typing indicator while Claude works
     async with thread.typing():
-        response = await bridge.ask_async(prompt)
+        if living_mode:
+            response = await bridge.ask_as("discord", user_id, prompt)
+        else:
+            response = await bridge.ask_async(prompt)
 
     # Delete the "Thinking..." placeholder
     await thinking_msg.delete()
@@ -149,6 +188,46 @@ async def ask_claude(prompt: str, interaction: discord.Interaction) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Notification poller background task
+# ---------------------------------------------------------------------------
+
+async def _notification_poller() -> None:
+    """Poll NotificationQueue every NOTIFICATION_POLL_INTERVAL seconds and deliver."""
+    await bot.wait_until_ready()
+    logger.info("Notification poller ready.")
+
+    while not bot.is_closed():
+        try:
+            notifications = notification_queue.pop_all("discord")
+            for note in notifications:
+                recipient_id = note.get("user_id")
+                message = note.get("message", "")
+
+                if recipient_id is None:
+                    # Broadcast — skip if no opted-in users
+                    logger.info("Broadcast notification (no specific user), skipping for now.")
+                    continue
+
+                # Only deliver if user has opted in
+                if recipient_id not in notify_opted_in:
+                    logger.debug(
+                        "Skipping notification for %s (not opted in).", recipient_id
+                    )
+                    continue
+
+                try:
+                    user = await bot.fetch_user(int(recipient_id))
+                    if user:
+                        await user.send(f"**Notification:**\n{message}")
+                except Exception as exc:
+                    logger.error("Failed to deliver notification to %s: %s", recipient_id, exc)
+        except Exception as exc:
+            logger.error("Notification poller error: %s", exc)
+
+        await asyncio.sleep(NOTIFICATION_POLL_INTERVAL)
+
+
+# ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
 
@@ -163,6 +242,74 @@ async def cmd_ask(interaction: discord.Interaction, prompt: str) -> None:
 
     await interaction.response.send_message(f"**Prompt:** {prompt}")
     await ask_claude(prompt, interaction)
+
+
+@bot.tree.command(name="reset", description="Clear your conversation session (start fresh)")
+async def cmd_reset(interaction: discord.Interaction) -> None:
+    if not is_allowed(interaction.user):
+        await interaction.response.send_message(
+            "You are not authorized to use this bot.", ephemeral=True
+        )
+        return
+
+    if not living_mode:
+        await interaction.response.send_message(
+            "Sessions are not available (running in stateless mode).", ephemeral=True
+        )
+        return
+
+    user_id = str(interaction.user.id)
+    bridge.sessions.clear("discord", user_id)
+    await interaction.response.send_message("Session cleared. Your next message starts a fresh conversation.", ephemeral=True)
+
+
+@bot.tree.command(name="brain", description="Show the agent's current brain/memory summary")
+async def cmd_brain(interaction: discord.Interaction) -> None:
+    if not is_allowed(interaction.user):
+        await interaction.response.send_message(
+            "You are not authorized to use this bot.", ephemeral=True
+        )
+        return
+
+    if not living_mode:
+        await interaction.response.send_message(
+            "Brain is not available (running in stateless mode).", ephemeral=True
+        )
+        return
+
+    brain_content = bridge.brain.get_context()
+    # Truncate if too long for Discord
+    if len(brain_content) > DISCORD_MAX_LEN - 20:
+        brain_content = brain_content[: DISCORD_MAX_LEN - 20] + "\n\n*[truncated]*"
+    await interaction.response.send_message(f"```markdown\n{brain_content}\n```")
+
+
+@bot.tree.command(name="notify", description="Toggle proactive notifications on/off")
+async def cmd_notify(interaction: discord.Interaction) -> None:
+    if not is_allowed(interaction.user):
+        await interaction.response.send_message(
+            "You are not authorized to use this bot.", ephemeral=True
+        )
+        return
+
+    if notification_queue is None:
+        await interaction.response.send_message(
+            "Notifications are not available.", ephemeral=True
+        )
+        return
+
+    user_id = str(interaction.user.id)
+    if user_id in notify_opted_in:
+        notify_opted_in.discard(user_id)
+        await interaction.response.send_message(
+            "Proactive notifications **disabled**. Use `/notify` again to re-enable.", ephemeral=True
+        )
+    else:
+        notify_opted_in.add(user_id)
+        await interaction.response.send_message(
+            "Proactive notifications **enabled**. The agent will DM you when it has updates. "
+            "Use `/notify` again to disable.", ephemeral=True
+        )
 
 
 @bot.tree.command(name="project", description="View or change the active project directory")
@@ -207,10 +354,14 @@ async def cmd_model(interaction: discord.Interaction, name: str | None = None) -
 
 @bot.tree.command(name="help", description="Show help for the Claude Discord bot")
 async def cmd_help(interaction: discord.Interaction) -> None:
+    mode_label = "living agent" if living_mode else "stateless"
     help_text = (
-        "**Claude Code Discord Bot**\n\n"
+        f"**Claude Code Discord Bot** (mode: {mode_label})\n\n"
         "**Commands:**\n"
         "`/ask <prompt>` — Ask Claude Code a question or give it an instruction\n"
+        "`/reset` — Clear your session and start a fresh conversation\n"
+        "`/brain` — Show the agent's current brain/memory summary\n"
+        "`/notify` — Toggle proactive notifications on/off\n"
         "`/project [path]` — View or change the active project directory\n"
         "`/model [name]` — View or change the Claude model\n"
         "`/help` — Show this help message\n\n"
@@ -219,6 +370,11 @@ async def cmd_help(interaction: discord.Interaction) -> None:
         "- Long responses are automatically split across multiple messages.\n"
         "- The bot shows a typing indicator while Claude is processing.\n"
     )
+    if living_mode:
+        help_text += (
+            "- Sessions persist across messages — Claude remembers context.\n"
+            "- Use `/reset` to start a fresh conversation.\n"
+        )
     await interaction.response.send_message(help_text)
 
 
@@ -228,13 +384,18 @@ async def cmd_help(interaction: discord.Interaction) -> None:
 
 @bot.event
 async def on_ready() -> None:
-    logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
+    mode_label = "LIVING" if living_mode else "STATELESS"
+    logger.info("Logged in as %s (ID: %s) [%s mode]", bot.user, bot.user.id, mode_label)
     logger.info("Project dir: %s", bridge.project_dir)
     logger.info("Model: %s", bridge.model or "(default)")
     if DISCORD_ALLOWED_USERS:
         logger.info("Allowed users: %s", DISCORD_ALLOWED_USERS)
     else:
         logger.info("No user allowlist — all users permitted.")
+    if notification_queue is not None:
+        logger.info("Notifications: enabled (polling every %ds)", NOTIFICATION_POLL_INTERVAL)
+    else:
+        logger.info("Notifications: disabled")
 
 
 # ---------------------------------------------------------------------------

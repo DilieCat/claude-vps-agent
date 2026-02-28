@@ -10,6 +10,8 @@
 #   max_budget_usd:   Max spend per invocation (optional)
 #   timeout_seconds:  Timeout in seconds (default: 300)
 #   enabled:          true/false (default: true)
+#   notify:           Push result to notification queue (default: true)
+#   notify_platforms: List of platforms to notify (default: [telegram, discord])
 
 tasks:
   # ---- Daily code review ----
@@ -23,6 +25,8 @@ tasks:
     allowed_tools: "Read,Bash,Glob,Grep"
     timeout_seconds: 600
     enabled: true
+    notify: true
+    notify_platforms: ["telegram", "discord"]
 
   # ---- Weekly dependency audit ----
   - name: weekly-dependency-check
@@ -35,6 +39,8 @@ tasks:
     allowed_tools: "Read,Bash,Glob"
     timeout_seconds: 300
     enabled: true
+    notify: true
+    notify_platforms: ["telegram", "discord"]
 
   # ---- Nightly test runner ----
   - name: nightly-tests
@@ -46,6 +52,8 @@ tasks:
     allowed_tools: "Read,Bash,Glob,Grep"
     timeout_seconds: 900
     enabled: false                   # Enable when tests are ready
+    notify: true
+    notify_platforms: ["telegram", "discord"]
 
   # ---- Monthly cleanup ----
   - name: monthly-cleanup-report
@@ -59,6 +67,8 @@ tasks:
     allowed_tools: "Read,Bash,Glob,Grep"
     timeout_seconds: 600
     enabled: true
+    notify: true
+    notify_platforms: ["telegram", "discord"]
 
   # ---- Hourly health check (example) ----
   - name: hourly-health-check
@@ -70,3 +80,5 @@ tasks:
     max_budget_usd: 0.10
     timeout_seconds: 120
     enabled: false                   # Enable if needed
+    notify: true
+    notify_platforms: ["telegram"]

@@ -3,7 +3,9 @@
 scheduler.py — YAML-based task scheduler for Claude Code.
 
 Reads task definitions from tasks.yaml, checks cron schedules,
-and dispatches prompts to Claude via ClaudeBridge.
+and dispatches prompts to Claude via LivingBridge (brain-aware,
+session-persistent) with fallback to ClaudeBridge. Pushes results
+to the notification queue for delivery by platform bots.
 
 Usage:
     # One-shot: check and run all due tasks, then exit
@@ -33,9 +35,10 @@ import yaml
 from croniter import croniter
 from dotenv import load_dotenv
 
-# Import ClaudeBridge from project lib
+# Import bridge and support modules from project lib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from lib.claude_bridge import ClaudeBridge
+from lib.claude_bridge import ClaudeBridge, LivingBridge
+from lib.notifier import NotificationQueue
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -135,6 +138,8 @@ def load_tasks(tasks_file: Path) -> list[dict]:
             "max_budget_usd": task.get("max_budget_usd"),
             "timeout_seconds": task.get("timeout_seconds", 300),
             "enabled": task.get("enabled", True),
+            "notify": task.get("notify", True),
+            "notify_platforms": task.get("notify_platforms", ["telegram", "discord"]),
         })
 
     logger.info("Loaded %d valid task(s) from %s", len(tasks), tasks_file)
@@ -163,16 +168,13 @@ def is_due(task: dict, state: dict, now: datetime.datetime) -> bool:
     return next_time <= now
 
 
-def run_task(task: dict) -> None:
-    """Execute a single scheduled task via ClaudeBridge and log the result."""
-    logger.info(">>> Running task: %s", task["name"])
-
-    # Resolve allowed_tools: task-level overrides env default
+def _make_bridge(task: dict) -> ClaudeBridge | LivingBridge:
+    """Create a LivingBridge for the task, falling back to ClaudeBridge."""
     allowed_tools = task.get("allowed_tools")
     if isinstance(allowed_tools, str):
         allowed_tools = [t.strip() for t in allowed_tools.split(",") if t.strip()]
 
-    bridge = ClaudeBridge(
+    kwargs = dict(
         project_dir=task["project_dir"],
         model=task.get("model"),
         allowed_tools=allowed_tools,
@@ -180,7 +182,51 @@ def run_task(task: dict) -> None:
         timeout_seconds=task.get("timeout_seconds", 300),
     )
 
-    response = bridge.ask(task["prompt"])
+    try:
+        bridge = LivingBridge(**kwargs)
+        logger.debug("Using LivingBridge for task '%s'", task["name"])
+        return bridge
+    except Exception as exc:
+        logger.warning("LivingBridge unavailable (%s), falling back to ClaudeBridge", exc)
+        return ClaudeBridge(**kwargs)
+
+
+# Shared instances — initialised lazily in run_task
+_notifier: NotificationQueue | None = None
+_brain = None  # lib.brain.Brain
+
+
+def _get_notifier() -> NotificationQueue:
+    global _notifier
+    if _notifier is None:
+        _notifier = NotificationQueue()
+    return _notifier
+
+
+def _get_brain():
+    global _brain
+    if _brain is None:
+        from lib.brain import Brain
+        _brain = Brain()
+    return _brain
+
+
+def run_task(task: dict) -> None:
+    """Execute a single scheduled task via LivingBridge and log the result.
+
+    After execution:
+    - Logs a brain event via brain.add_event()
+    - Pushes the result to the notification queue (if task.notify is True)
+    """
+    logger.info(">>> Running task: %s", task["name"])
+
+    bridge = _make_bridge(task)
+
+    # Use the sync brain-aware path when available
+    if isinstance(bridge, LivingBridge):
+        response = bridge.ask_as_sync("scheduler", task["name"], task["prompt"])
+    else:
+        response = bridge.ask(task["prompt"])
 
     # Write result to a per-task log file
     safe_name = task["name"].replace(" ", "_").replace("/", "_")
@@ -201,13 +247,42 @@ def run_task(task: dict) -> None:
     )
     log_file.write_text(log_content)
 
+    # --- Log to brain ---
+    brain = _get_brain()
     if response.is_error:
         logger.error("Task '%s' failed (exit %d): %s",
                       task["name"], response.exit_code,
                       response.text[:200])
+        brain.add_event(
+            f"[scheduler] Task '{task['name']}' FAILED "
+            f"(exit {response.exit_code}): {response.text[:120]}"
+        )
     else:
         logger.info("Task '%s' completed — cost=$%.4f, %d chars",
                      task["name"], response.cost_usd, len(response.text))
+        brain.add_event(
+            f"[scheduler] Task '{task['name']}' completed "
+            f"(cost=${response.cost_usd:.4f}, {len(response.text)} chars)"
+        )
+
+    # --- Push to notification queue ---
+    if task.get("notify", True):
+        notifier = _get_notifier()
+        source = f"scheduler:{task['name']}"
+
+        # Build a concise notification message
+        if response.is_error:
+            summary = response.text[:300]
+            notif_msg = f"[Scheduled Task Failed] {task['name']}\n\n{summary}"
+        else:
+            # Truncate long results for notification readability
+            summary = response.text[:500]
+            if len(response.text) > 500:
+                summary += "\n\n(truncated — full output in scheduler logs)"
+            notif_msg = f"[Scheduled Task] {task['name']}\n\n{summary}"
+
+        for platform in task.get("notify_platforms", ["telegram", "discord"]):
+            notifier.push_broadcast(platform, notif_msg, source=source)
 
 
 def check_and_run(tasks: list[dict], state: dict) -> dict:
