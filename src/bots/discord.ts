@@ -20,6 +20,8 @@ import {
   ChannelType,
   type ChatInputCommandInteraction,
   type TextChannel,
+  type ThreadChannel,
+  type DMChannel,
 } from "discord.js";
 import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs } from "../lib/index.js";
 import type { Notification } from "../lib/index.js";
@@ -190,7 +192,7 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
   if (!channel || !("send" in channel)) return;
 
   // Create a thread for the conversation if we're in a text channel
-  let target: { send: (typeof channel)["send"] };
+  let target: TextChannel | ThreadChannel | DMChannel;
   if (channel.type === ChannelType.GuildText) {
     const threadName = prompt.length <= 100 ? prompt : prompt.slice(0, 97) + "...";
     target = await (channel as TextChannel).threads.create({
@@ -199,11 +201,14 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
     });
   } else {
     // Already in a thread, DM, or other sendable channel — reply in place
-    target = channel as { send: (typeof channel)["send"] };
+    target = channel as TextChannel | ThreadChannel | DMChannel;
   }
 
-  // Send initial acknowledgement in the thread
-  const thinkingMsg = await target.send("Thinking...");
+  // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
+  await target.sendTyping();
+  const typingInterval = setInterval(() => {
+    target.sendTyping().catch(() => {});
+  }, 8_000);
 
   const userBridge = getUserBridge(userId);
   let response;
@@ -214,15 +219,14 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
       response = await userBridge.askAsync(prompt);
     }
   } catch {
-    await thinkingMsg.delete().catch(() => {});
+    clearInterval(typingInterval);
     await target.send(
       "Sorry, something went wrong while contacting Claude. Please try again later.",
     );
     return;
   }
 
-  // Delete the "Thinking..." placeholder
-  await thinkingMsg.delete().catch(() => {});
+  clearInterval(typingInterval);
 
   if (response.isError) {
     await target.send(`**Error:** ${response.text}`);
@@ -472,8 +476,11 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Show typing indicator
+  // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
   await message.channel.sendTyping();
+  const typingInterval = setInterval(() => {
+    message.channel.sendTyping().catch(() => {});
+  }, 8_000);
 
   const userBridge = getUserBridge(userId);
   let response;
@@ -484,10 +491,13 @@ client.on("messageCreate", async (message) => {
       response = await userBridge.askAsync(prompt);
     }
   } catch (err) {
+    clearInterval(typingInterval);
     console.error(`[discord] Error processing message from ${userId}:`, err);
     await message.reply("Sorry, something went wrong while contacting Claude. Please try again later.");
     return;
   }
+
+  clearInterval(typingInterval);
 
   if (response.isError) {
     await message.reply(`**Error:** ${response.text}`);
