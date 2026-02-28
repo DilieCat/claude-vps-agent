@@ -1,0 +1,32 @@
+{
+  "name": "claude-vps-agent",
+  "version": "1.0.0",
+  "description": "Self-hosted Claude Code agent with messaging bots, scheduling, and persistent memory",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "setup": "npx tsx setup.ts",
+    "telegram": "npx tsx src/bots/telegram.ts",
+    "discord": "npx tsx src/bots/discord.ts",
+    "scheduler": "npx tsx src/scheduler.ts",
+    "scheduler:once": "npx tsx src/scheduler.ts --once",
+    "start": "npm run telegram & npm run discord & npm run scheduler",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.0",
+    "discord.js": "^14.16.0",
+    "croner": "^8.1.0",
+    "js-yaml": "^4.1.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0",
+    "@types/js-yaml": "^4.0.9"
+  }
+}

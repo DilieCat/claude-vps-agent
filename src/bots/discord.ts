@@ -1,0 +1,525 @@
+/**
+ * Discord bot for Claude Code — relay messages to Claude via LivingBridge (or ClaudeBridge fallback).
+ *
+ * Supports persistent sessions, brain memory, proactive notifications, and slash commands.
+ *
+ * Usage:
+ *    npx tsx src/bots/discord.ts      # reads config from .env / environment
+ */
+
+import "dotenv/config";
+
+import fs from "node:fs";
+import path from "node:path";
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChannelType,
+  type ChatInputCommandInteraction,
+  type TextChannel,
+} from "discord.js";
+import { ClaudeBridge, LivingBridge, NotificationQueue } from "../lib/index.js";
+import type { Notification } from "../lib/index.js";
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+const DISCORD_BOT_TOKEN = process.env["DISCORD_BOT_TOKEN"] ?? "";
+const DISCORD_ALLOWED_USERS = new Set(
+  (process.env["DISCORD_ALLOWED_USERS"] ?? "")
+    .split(",")
+    .map((u) => u.trim())
+    .filter(Boolean),
+);
+const CLAUDE_PROJECT_DIR = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
+const CLAUDE_MODEL = process.env["CLAUDE_MODEL"];
+const CLAUDE_ALLOWED_TOOLS = process.env["CLAUDE_ALLOWED_TOOLS"] ?? "";
+
+const DISCORD_MAX_LEN = 2000;
+const NOTIFICATION_POLL_INTERVAL = 60_000; // ms
+
+const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
+  process.env["ALLOWED_PROJECT_BASE"] ?? (process.env["HOME"] ?? "."),
+);
+
+const PROJECT_ROOT = path.resolve(import.meta.dirname ?? ".", "..", "..");
+
+// Per-user settings
+interface UserSettings {
+  projectDir?: string;
+  model?: string;
+}
+const userSettings = new Map<string, UserSettings>();
+
+// ---------------------------------------------------------------------------
+// Bridge instance — try LivingBridge, fall back to ClaudeBridge
+// ---------------------------------------------------------------------------
+const allowedTools =
+  CLAUDE_ALLOWED_TOOLS.split(",")
+    .map((t) => t.trim())
+    .filter(Boolean) || undefined;
+
+let bridge: ClaudeBridge | LivingBridge;
+let livingMode = false;
+
+try {
+  bridge = new LivingBridge({
+    projectDir: CLAUDE_PROJECT_DIR,
+    model: CLAUDE_MODEL,
+    allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+  });
+  livingMode = true;
+  console.log("[discord] LivingBridge initialized — living agent mode active.");
+} catch (exc) {
+  console.warn(`[discord] LivingBridge init failed (${exc}), falling back to ClaudeBridge.`);
+  bridge = new ClaudeBridge({
+    projectDir: CLAUDE_PROJECT_DIR,
+    model: CLAUDE_MODEL,
+    allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Notification queue (optional — only in living mode)
+// ---------------------------------------------------------------------------
+let notificationQueue: NotificationQueue | null = null;
+if (livingMode) {
+  try {
+    notificationQueue = new NotificationQueue();
+    console.log("[discord] NotificationQueue loaded.");
+  } catch (exc) {
+    console.warn(`[discord] NotificationQueue init failed (${exc}), notifications disabled.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notification prefs (persisted to disk)
+// ---------------------------------------------------------------------------
+const NOTIFY_PREFS_PATH = path.join(PROJECT_ROOT, "data", "discord_notify_prefs.json");
+
+function loadNotifyPrefs(): Record<string, boolean> {
+  const dir = path.dirname(NOTIFY_PREFS_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  if (fs.existsSync(NOTIFY_PREFS_PATH)) {
+    try {
+      return JSON.parse(fs.readFileSync(NOTIFY_PREFS_PATH, "utf-8")) as Record<string, boolean>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function saveNotifyPrefs(prefs: Record<string, boolean>): void {
+  const dir = path.dirname(NOTIFY_PREFS_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(NOTIFY_PREFS_PATH, JSON.stringify(prefs, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isAllowed(userId: string, userTag: string): boolean {
+  if (DISCORD_ALLOWED_USERS.size === 0) return true;
+  return DISCORD_ALLOWED_USERS.has(userId) || DISCORD_ALLOWED_USERS.has(userTag);
+}
+
+function validateProjectPath(rawPath: string): string | null {
+  const real = fs.realpathSync(path.resolve(rawPath.replace(/^~/, process.env["HOME"] ?? ".")));
+  if (real !== ALLOWED_PROJECT_BASE && !real.startsWith(ALLOWED_PROJECT_BASE + path.sep)) {
+    return null;
+  }
+  return real;
+}
+
+function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
+  const settings = userSettings.get(userId);
+  if (!settings) return bridge;
+
+  // Create a bridge with user-specific overrides
+  const BridgeClass = livingMode ? LivingBridge : ClaudeBridge;
+  return new BridgeClass({
+    projectDir: settings.projectDir ?? bridge.projectDir,
+    model: settings.model ?? bridge.model,
+    allowedTools: bridge.allowedTools.length > 0 ? bridge.allowedTools : undefined,
+  });
+}
+
+function splitMessage(text: string, limit: number = DISCORD_MAX_LEN): string[] {
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= limit) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try to find a good split point
+    let splitAt = remaining.lastIndexOf("\n", limit);
+    if (splitAt === -1 || splitAt < limit / 2) {
+      splitAt = remaining.lastIndexOf(" ", limit);
+    }
+    if (splitAt === -1 || splitAt < limit / 2) {
+      splitAt = limit;
+    }
+
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n+/, "");
+  }
+
+  return chunks;
+}
+
+// ---------------------------------------------------------------------------
+// Bot setup
+// ---------------------------------------------------------------------------
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+// ---------------------------------------------------------------------------
+// Slash command definitions
+// ---------------------------------------------------------------------------
+const commands = [
+  new SlashCommandBuilder()
+    .setName("ask")
+    .setDescription("Ask Claude Code a question")
+    .addStringOption((opt) => opt.setName("prompt").setDescription("Your question or instruction for Claude").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("reset")
+    .setDescription("Clear your conversation session (start fresh)"),
+  new SlashCommandBuilder()
+    .setName("brain")
+    .setDescription("Show the agent's current brain/memory summary"),
+  new SlashCommandBuilder()
+    .setName("notify")
+    .setDescription("Toggle proactive notifications on/off"),
+  new SlashCommandBuilder()
+    .setName("project")
+    .setDescription("View or change the active project directory")
+    .addStringOption((opt) => opt.setName("path").setDescription("New project directory path (leave empty to view current)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("model")
+    .setDescription("View or change the Claude model")
+    .addStringOption((opt) => opt.setName("name").setDescription("Model name (leave empty to view current)").setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("Show help for the Claude Discord bot"),
+];
+
+// ---------------------------------------------------------------------------
+// Ask Claude helper
+// ---------------------------------------------------------------------------
+
+async function askClaude(prompt: string, interaction: ChatInputCommandInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  const channel = interaction.channel;
+  if (!channel || !("send" in channel)) return;
+
+  // Create a thread for the conversation if we're in a text channel
+  let target: { send: (typeof channel)["send"] };
+  if (channel.type === ChannelType.GuildText) {
+    const threadName = prompt.length <= 100 ? prompt : prompt.slice(0, 97) + "...";
+    target = await (channel as TextChannel).threads.create({
+      name: threadName,
+      autoArchiveDuration: 60,
+    });
+  } else {
+    // Already in a thread, DM, or other sendable channel — reply in place
+    target = channel as { send: (typeof channel)["send"] };
+  }
+
+  // Send initial acknowledgement in the thread
+  const thinkingMsg = await target.send("Thinking...");
+
+  const userBridge = getUserBridge(userId);
+  let response;
+  try {
+    if (livingMode && userBridge instanceof LivingBridge) {
+      response = await userBridge.askAs("discord", userId, prompt);
+    } else {
+      response = await userBridge.askAsync(prompt);
+    }
+  } catch {
+    await thinkingMsg.delete().catch(() => {});
+    await target.send(
+      "Sorry, something went wrong while contacting Claude. Please try again later.",
+    );
+    return;
+  }
+
+  // Delete the "Thinking..." placeholder
+  await thinkingMsg.delete().catch(() => {});
+
+  if (response.isError) {
+    await target.send(`**Error:** ${response.text}`);
+    return;
+  }
+
+  // Send the response, splitting if necessary
+  const chunks = splitMessage(response.text);
+  for (const chunk of chunks) {
+    await target.send(chunk);
+  }
+
+  // Footer with cost info
+  if (response.costUsd > 0) {
+    const footer = `-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`;
+    await target.send(footer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notification poller
+// ---------------------------------------------------------------------------
+
+function startNotificationPoller(): void {
+  if (!notificationQueue) return;
+
+  setInterval(async () => {
+    try {
+      const notifications: Notification[] = notificationQueue!.popAll("discord");
+      if (notifications.length === 0) return;
+
+      const prefs = loadNotifyPrefs();
+      const optedIn = Object.entries(prefs)
+        .filter(([, enabled]) => enabled)
+        .map(([uid]) => uid);
+
+      for (const note of notifications) {
+        const recipientId = note.user_id;
+        const message = note.message;
+        if (!message) continue;
+
+        // Determine recipients: specific user or all opted-in (broadcast)
+        let recipients: string[];
+        if (recipientId != null) {
+          recipients = prefs[recipientId] ? [recipientId] : [];
+        } else {
+          recipients = optedIn;
+        }
+
+        for (const recipient of recipients) {
+          try {
+            const user = await client.users.fetch(recipient);
+            if (user) {
+              await user.send(`**Notification:**\n${message}`);
+              console.log(`[discord] Sent notification to user ${recipient}`);
+            }
+          } catch (exc) {
+            console.error(`[discord] Failed to deliver notification to ${recipient}: ${exc}`);
+          }
+        }
+      }
+    } catch (exc) {
+      console.error(`[discord] Notification poller error: ${exc}`);
+    }
+  }, NOTIFICATION_POLL_INTERVAL);
+}
+
+// ---------------------------------------------------------------------------
+// Interaction handler (slash commands)
+// ---------------------------------------------------------------------------
+
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const userId = interaction.user.id;
+  const userTag = interaction.user.tag;
+
+  // Authorization check
+  if (!isAllowed(userId, userTag)) {
+    await interaction.reply({ content: "You are not authorized to use this bot.", ephemeral: true });
+    return;
+  }
+
+  const { commandName } = interaction;
+
+  if (commandName === "ask") {
+    const prompt = interaction.options.getString("prompt", true);
+    await interaction.reply(`**Prompt:** ${prompt}`);
+    await askClaude(prompt, interaction);
+  } else if (commandName === "reset") {
+    if (!livingMode) {
+      await interaction.reply({
+        content: "Sessions are not available (running in stateless mode).",
+        ephemeral: true,
+      });
+      return;
+    }
+    (bridge as LivingBridge).sessions.clear("discord", userId);
+    await interaction.reply({
+      content: "Session cleared. Your next message starts a fresh conversation.",
+      ephemeral: true,
+    });
+  } else if (commandName === "brain") {
+    if (!livingMode) {
+      await interaction.reply({
+        content: "Brain is not available (running in stateless mode).",
+        ephemeral: true,
+      });
+      return;
+    }
+    let brainContent = (bridge as LivingBridge).brain.getContext();
+    // Truncate if too long for Discord
+    // Wrapper: "```markdown\n" (12) + "\n```" (4) = 16 chars
+    const wrapperOverhead = "```markdown\n".length + "\n```".length;
+    const truncationSuffix = "\n\n*[truncated]*";
+    const maxContent = DISCORD_MAX_LEN - wrapperOverhead;
+    if (brainContent.length > maxContent) {
+      brainContent = brainContent.slice(0, maxContent - truncationSuffix.length) + truncationSuffix;
+    }
+    await interaction.reply(`\`\`\`markdown\n${brainContent}\n\`\`\``);
+  } else if (commandName === "notify") {
+    if (!notificationQueue) {
+      await interaction.reply({ content: "Notifications are not available.", ephemeral: true });
+      return;
+    }
+    const prefs = loadNotifyPrefs();
+    const newState = !prefs[userId];
+    prefs[userId] = newState;
+    saveNotifyPrefs(prefs);
+
+    if (newState) {
+      await interaction.reply({
+        content:
+          "Proactive notifications **enabled**. The agent will DM you when it has updates. Use `/notify` again to disable.",
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: "Proactive notifications **disabled**. Use `/notify` again to re-enable.",
+        ephemeral: true,
+      });
+    }
+  } else if (commandName === "project") {
+    const rawPath = interaction.options.getString("path");
+    if (rawPath) {
+      let validated: string | null;
+      try {
+        validated = validateProjectPath(rawPath);
+      } catch {
+        validated = null;
+      }
+      if (validated == null) {
+        await interaction.reply({
+          content: `Path rejected: must be inside \`${ALLOWED_PROJECT_BASE}\``,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!fs.existsSync(validated) || !fs.statSync(validated).isDirectory()) {
+        await interaction.reply({
+          content: `Directory not found: \`${validated}\``,
+          ephemeral: true,
+        });
+        return;
+      }
+      const existing = userSettings.get(userId) ?? {};
+      existing.projectDir = validated;
+      userSettings.set(userId, existing);
+      await interaction.reply(`Project directory set to: \`${validated}\``);
+    } else {
+      const userBridge = getUserBridge(userId);
+      await interaction.reply(`Current project directory: \`${userBridge.projectDir}\``);
+    }
+  } else if (commandName === "model") {
+    const name = interaction.options.getString("name");
+    if (name) {
+      const existing = userSettings.get(userId) ?? {};
+      existing.model = name;
+      userSettings.set(userId, existing);
+      await interaction.reply(`Model set to: \`${name}\``);
+    } else {
+      const userBridge = getUserBridge(userId);
+      const current = userBridge.model ?? "(default)";
+      await interaction.reply(`Current model: \`${current}\``);
+    }
+  } else if (commandName === "help") {
+    const modeLabel = livingMode ? "living agent" : "stateless";
+    let helpText =
+      `**Claude Code Discord Bot** (mode: ${modeLabel})\n\n` +
+      "**Commands:**\n" +
+      "`/ask <prompt>` — Ask Claude Code a question or give it an instruction\n" +
+      "`/reset` — Clear your session and start a fresh conversation\n" +
+      "`/brain` — Show the agent's current brain/memory summary\n" +
+      "`/notify` — Toggle proactive notifications on/off\n" +
+      "`/project [path]` — View or change the active project directory\n" +
+      "`/model [name]` — View or change the Claude model\n" +
+      "`/help` — Show this help message\n\n" +
+      "**Notes:**\n" +
+      "- Each `/ask` creates a new thread for the conversation.\n" +
+      "- Long responses are automatically split across multiple messages.\n" +
+      "- The bot shows a typing indicator while Claude is processing.\n";
+    if (livingMode) {
+      helpText +=
+        "- Sessions persist across messages — Claude remembers context.\n" +
+        "- Use `/reset` to start a fresh conversation.\n";
+    }
+    await interaction.reply(helpText);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Ready event
+// ---------------------------------------------------------------------------
+
+client.once("ready", async () => {
+  const modeLabel = livingMode ? "LIVING" : "STATELESS";
+  console.log(`[discord] Logged in as ${client.user?.tag} (ID: ${client.user?.id}) [${modeLabel} mode]`);
+  console.log(`[discord] Project dir: ${bridge.projectDir}`);
+  console.log(`[discord] Model: ${bridge.model ?? "(default)"}`);
+  if (DISCORD_ALLOWED_USERS.size > 0) {
+    console.log(`[discord] Allowed users: ${[...DISCORD_ALLOWED_USERS].join(", ")}`);
+  } else {
+    console.log("[discord] No user allowlist — all users permitted.");
+  }
+  if (notificationQueue) {
+    console.log(`[discord] Notifications: enabled (polling every ${NOTIFICATION_POLL_INTERVAL / 1000}s)`);
+  } else {
+    console.log("[discord] Notifications: disabled");
+  }
+
+  // Register slash commands
+  if (client.user) {
+    const rest = new REST({ version: "10" }).setToken(DISCORD_BOT_TOKEN);
+    try {
+      await rest.put(Routes.applicationCommands(client.user.id), {
+        body: commands.map((c) => c.toJSON()),
+      });
+      console.log("[discord] Slash commands registered.");
+    } catch (err) {
+      console.error("[discord] Failed to register slash commands:", err);
+    }
+  }
+
+  // Start notification poller
+  startNotificationPoller();
+  if (notificationQueue) {
+    console.log(`[discord] Notification poller started (every ${NOTIFICATION_POLL_INTERVAL / 1000}s).`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Entrypoint
+// ---------------------------------------------------------------------------
+
+function main(): void {
+  if (!DISCORD_BOT_TOKEN) {
+    console.error("Error: DISCORD_BOT_TOKEN is not set.");
+    console.error("Set it in your .env file or environment variables.");
+    process.exit(1);
+  }
+  client.login(DISCORD_BOT_TOKEN);
+}
+
+main();

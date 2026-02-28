@@ -2,7 +2,6 @@
 
 SHELL := /bin/bash
 ENV_FILE := .env
-VENV := .venv/bin
 
 # Remote deployment settings (only needed for remote-* targets)
 VPS_HOST ?= $(shell grep '^VPS_HOST=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 | tr -d '"')
@@ -20,31 +19,26 @@ help: ## Show this help
 # ---------------------------------------------------------------------------
 
 setup: ## Run interactive setup wizard
-	python3 setup.py
+	npx tsx setup.ts
 
-install: ## Create venv and install all Python dependencies
-	python3 -m venv .venv
-	$(VENV)/pip install --upgrade pip
-	$(VENV)/pip install -r bots/telegram/requirements.txt
-	$(VENV)/pip install -r bots/discord/requirements.txt
-	$(VENV)/pip install -r scheduler/requirements.txt
-	@echo "\nAll dependencies installed. Activate with: source .venv/bin/activate"
+install: ## Install all Node.js dependencies
+	npm install
 
 # ---------------------------------------------------------------------------
 # Run services locally
 # ---------------------------------------------------------------------------
 
 telegram: ## Run Telegram bot
-	$(VENV)/python bots/telegram/bot.py
+	npx tsx src/bots/telegram.ts
 
 discord: ## Run Discord bot
-	$(VENV)/python bots/discord/bot.py
+	npx tsx src/bots/discord.ts
 
 scheduler: ## Run scheduler
-	$(VENV)/python scheduler/scheduler.py
+	npx tsx src/scheduler.ts
 
 scheduler-once: ## Run scheduler one-shot (check and run due tasks)
-	$(VENV)/python scheduler/scheduler.py --once
+	npx tsx src/scheduler.ts --once
 
 # ---------------------------------------------------------------------------
 # Service management (works with systemd or local processes)
@@ -63,14 +57,14 @@ start: ## Start all enabled services
 	else \
 		echo "Starting services as background processes..."; \
 		echo "(Use 'make stop' to stop them later)"; \
-		if [ -f bots/telegram/bot.py ]; then \
-			$(VENV)/python bots/telegram/bot.py & echo "  telegram-bot: started (PID $$!)"; \
+		if [ -f src/bots/telegram.ts ]; then \
+			npx tsx src/bots/telegram.ts & echo "  telegram-bot: started (PID $$!)"; \
 		fi; \
-		if [ -f bots/discord/bot.py ]; then \
-			$(VENV)/python bots/discord/bot.py & echo "  discord-bot: started (PID $$!)"; \
+		if [ -f src/bots/discord.ts ]; then \
+			npx tsx src/bots/discord.ts & echo "  discord-bot: started (PID $$!)"; \
 		fi; \
-		if [ -f scheduler/scheduler.py ]; then \
-			$(VENV)/python scheduler/scheduler.py & echo "  scheduler: started (PID $$!)"; \
+		if [ -f src/scheduler.ts ]; then \
+			npx tsx src/scheduler.ts & echo "  scheduler: started (PID $$!)"; \
 		fi; \
 	fi
 
@@ -82,9 +76,9 @@ stop: ## Stop all services
 		done; \
 	else \
 		echo "Stopping background processes..."; \
-		pkill -f 'bots/telegram/bot.py' 2>/dev/null && echo "  telegram-bot: stopped" || echo "  telegram-bot: not running"; \
-		pkill -f 'bots/discord/bot.py' 2>/dev/null && echo "  discord-bot: stopped" || echo "  discord-bot: not running"; \
-		pkill -f 'scheduler/scheduler.py' 2>/dev/null && echo "  scheduler: stopped" || echo "  scheduler: not running"; \
+		pkill -f 'src/bots/telegram.ts' 2>/dev/null && echo "  telegram-bot: stopped" || echo "  telegram-bot: not running"; \
+		pkill -f 'src/bots/discord.ts' 2>/dev/null && echo "  discord-bot: stopped" || echo "  discord-bot: not running"; \
+		pkill -f 'src/scheduler.ts' 2>/dev/null && echo "  scheduler: stopped" || echo "  scheduler: not running"; \
 	fi
 
 restart: ## Restart all services
@@ -103,9 +97,9 @@ status: ## Show status of services
 		done; \
 	else \
 		echo "Checking local processes..."; \
-		pgrep -fa 'bots/telegram/bot.py' >/dev/null 2>&1 && echo "  telegram-bot: running" || echo "  telegram-bot: not running"; \
-		pgrep -fa 'bots/discord/bot.py' >/dev/null 2>&1 && echo "  discord-bot: running" || echo "  discord-bot: not running"; \
-		pgrep -fa 'scheduler/scheduler.py' >/dev/null 2>&1 && echo "  scheduler: running" || echo "  scheduler: not running"; \
+		pgrep -fa 'src/bots/telegram.ts' >/dev/null 2>&1 && echo "  telegram-bot: running" || echo "  telegram-bot: not running"; \
+		pgrep -fa 'src/bots/discord.ts' >/dev/null 2>&1 && echo "  discord-bot: running" || echo "  discord-bot: not running"; \
+		pgrep -fa 'src/scheduler.ts' >/dev/null 2>&1 && echo "  scheduler: running" || echo "  scheduler: not running"; \
 	fi
 
 logs: ## Tail service logs
@@ -119,16 +113,8 @@ logs: ## Tail service logs
 # Code quality
 # ---------------------------------------------------------------------------
 
-lint: ## Run linting on Python code
-	$(VENV)/python -m py_compile lib/claude_bridge.py
-	$(VENV)/python -m py_compile lib/brain.py
-	$(VENV)/python -m py_compile lib/session_store.py
-	$(VENV)/python -m py_compile lib/notifier.py
-	$(VENV)/python -m py_compile lib/filelock.py
-	$(VENV)/python -m py_compile bots/telegram/bot.py
-	$(VENV)/python -m py_compile bots/discord/bot.py
-	$(VENV)/python -m py_compile scheduler/scheduler.py
-	@echo "All files compile successfully"
+lint: ## Run TypeScript type checking
+	npx tsc --noEmit
 
 # ---------------------------------------------------------------------------
 # Remote deployment (for managing a remote server from your laptop)

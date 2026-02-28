@@ -1,9 +1,6 @@
 .env
-__pycache__/
-*.pyc
-.venv/
-venv/
 node_modules/
+dist/
 # Claude Code local files (not project config)
 .claude/settings.local.json
 .claude/projects/

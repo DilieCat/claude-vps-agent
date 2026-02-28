@@ -9,8 +9,8 @@ User=claude
 Group=claude
 WorkingDirectory=/home/claude/claude-vps-agent
 EnvironmentFile=/home/claude/claude-vps-agent/.env
-Environment=PYTHONPATH=/home/claude/claude-vps-agent
-ExecStart=/home/claude/claude-vps-agent/.venv/bin/python /home/claude/claude-vps-agent/bots/discord/bot.py
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npx tsx /home/claude/claude-vps-agent/src/bots/discord.ts
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

@@ -6,34 +6,37 @@ A modular, self-hostable toolkit for running Claude Code as a persistent agent w
 
 ```
 claude-agent/
-├── lib/claude_bridge.py        # Shared wrapper around `claude -p`
-├── lib/brain.py                # Persistent markdown memory (brain system)
-├── lib/session_store.py        # Per-user session tracking
-├── lib/notifier.py             # Notification queue for proactive messages
-├── lib/filelock.py             # Cross-process file locking
-├── bots/telegram/              # Telegram bot module
-├── bots/discord/               # Discord bot module
-├── scheduler/                  # YAML-based task scheduler
+├── src/lib/claude-bridge.ts    # Shared wrapper around `claude -p`
+├── src/lib/brain.ts            # Persistent markdown memory (brain system)
+├── src/lib/session-store.ts    # Per-user session tracking
+├── src/lib/notifier.ts         # Notification queue for proactive messages
+├── src/lib/filelock.ts         # Cross-process file locking
+├── src/lib/index.ts            # Re-exports for all lib modules
+├── src/bots/telegram.ts        # Telegram bot module
+├── src/bots/discord.ts         # Discord bot module
+├── src/scheduler.ts            # YAML-based task scheduler
+├── setup.ts                    # Interactive setup wizard (zero-dependency)
 ├── infra/                      # Server provisioning, systemd, deploy scripts
 ├── config/                     # MCP server configs
 ├── data/brain.md               # Persistent brain memory (runtime state)
 ├── data/brain.template.md      # Brain template for new setups
 ├── .env.example                # Environment variable template
 ├── Makefile                    # Local-first build/run targets + remote deployment
-├── docker-compose.yml          # Optional Docker setup
+├── package.json                # Node.js dependencies and scripts
+├── tsconfig.json               # TypeScript configuration
 └── README.md                   # User-facing documentation
 ```
 
 ## Conventions
 
-- Python 3.10+ with type hints
-- All bots import from `lib.claude_bridge` — never call `claude -p` directly
-- Config via environment variables (python-dotenv), never hardcoded
-- Each module has its own `requirements.txt`
+- TypeScript with strict mode enabled
+- All bots import from `src/lib` -- never call `claude -p` directly
+- Config via environment variables (dotenv), never hardcoded
+- All dependencies managed through package.json
 - Systemd service files in `infra/systemd/`
-- All code must be generic — no hardcoded usernames, paths, or tokens
+- All code must be generic -- no hardcoded usernames, paths, or tokens
 - Error handling: log errors, don't crash. Bots should auto-recover.
-- Use `asyncio` for bot event loops
+- Use `async/await` for bot event loops
 - README in English (project is international)
 
 ## claude -p Interface

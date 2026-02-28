@@ -32,7 +32,8 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 ```bash
 git clone https://github.com/yourusername/claude-agent.git
 cd claude-agent
-python3 setup.py
+npm install
+npx tsx setup.ts
 ```
 
 The setup wizard walks you through module selection, token configuration, dependency installation, and verification -- all in one step.
@@ -46,6 +47,15 @@ make scheduler        # Run scheduler
 make start            # Start all enabled services
 ```
 
+## Tech Stack
+
+- **TypeScript** -- all source code in `src/`
+- **telegraf** -- Telegram bot framework
+- **discord.js** -- Discord bot framework
+- **croner** -- cron scheduling
+- **dotenv** -- environment variable loading
+- **tsx** -- TypeScript execution without a compile step
+
 ## Architecture
 
 ```
@@ -53,13 +63,13 @@ make start            # Start all enabled services
   Telegram Bot ------->|                |---->|                   |
                 <------|  Claude Bridge |<----|  Claude Code CLI  |
   Discord Bot -------->|                |---->|  (claude -p)      |
-                <------|  (lib/         |<----|                   |
-  Scheduler ---------->|   claude_      |---->|  Your project     |
-                <------|   bridge.py)   |<----|  files             |
+                <------|  (src/lib/     |<----|                   |
+  Scheduler ---------->|   claude-      |---->|  Your project     |
+                <------|   bridge.ts)   |<----|  files             |
                        +----------------+     +-------------------+
 ```
 
-All integrations go through `lib/claude_bridge.py`, which wraps `claude -p` with:
+All integrations go through `src/lib/claude-bridge.ts`, which wraps `claude -p` with:
 - JSON output parsing
 - Timeout handling
 - Error recovery
@@ -67,7 +77,7 @@ All integrations go through `lib/claude_bridge.py`, which wraps `claude -p` with
 
 ## Configuration
 
-All config is via environment variables. Run `python3 setup.py` or see [`.env.example`](.env.example) for all options.
+All config is via environment variables. Run `npx tsx setup.ts` or see [`.env.example`](.env.example) for all options.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -116,7 +126,7 @@ Enable with `LIVING_MODE=true` in `.env`. This mode adds persistent memory, sess
 
 **Security:**
 - `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
-- File locking (`lib/filelock.py`) ensures multi-process safety for shared state files (brain, sessions)
+- File locking (`src/lib/filelock.ts`) ensures multi-process safety for shared state files (brain, sessions)
 
 ## Remote Deployment (Advanced)
 
