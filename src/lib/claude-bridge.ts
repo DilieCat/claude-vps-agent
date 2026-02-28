@@ -8,6 +8,7 @@
 
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Brain } from "./brain.js";
 import { SessionStore } from "./session-store.js";
@@ -93,31 +94,25 @@ export class ClaudeBridge {
   protected static readonly DEFAULT_TIMEOUT = 300;
 
   readonly projectDir: string;
+  readonly workspaceDir: string;
   readonly model: string | undefined;
   readonly allowedTools: string[];
   readonly maxBudgetUsd: number | undefined;
   readonly timeoutSeconds: number;
-  private readonly systemPrompt: string | undefined;
 
   constructor(options: {
     projectDir?: string;
+    workspaceDir?: string;
     model?: string;
     allowedTools?: string[];
     maxBudgetUsd?: number;
     timeoutSeconds?: number;
   } = {}) {
     this.projectDir = options.projectDir ?? process.cwd();
+    this.workspaceDir = options.workspaceDir
+      ?? process.env["CLAUDE_WORKSPACE_DIR"]
+      ?? path.join(os.homedir(), ".claude-agent", "workspace");
     this.model = options.model ?? process.env["CLAUDE_MODEL"];
-
-    // Cache system prompt at construction time (read once, not per request)
-    const systemPromptFile = path.join(this.projectDir, "data", "system-prompt.md");
-    try {
-      if (fs.existsSync(systemPromptFile)) {
-        this.systemPrompt = fs.readFileSync(systemPromptFile, "utf-8");
-      }
-    } catch {
-      console.warn("[claude-bridge] Could not read system-prompt.md, proceeding without it.");
-    }
 
     if (options.allowedTools) {
       this.allowedTools = options.allowedTools;
@@ -156,11 +151,6 @@ export class ClaudeBridge {
     }
     if (this.maxBudgetUsd !== undefined) {
       cmd.push("--max-budget-usd", String(this.maxBudgetUsd));
-    }
-
-    // Append cached system prompt with agent personality if available
-    if (this.systemPrompt) {
-      cmd.push("--append-system-prompt", this.systemPrompt);
     }
 
     return cmd;
@@ -203,7 +193,7 @@ export class ClaudeBridge {
 
     try {
       const result = spawnSync(bin, args, {
-        cwd: this.projectDir,
+        cwd: this.workspaceDir,
         encoding: "utf-8",
         timeout: this.timeoutSeconds * 1000,
         maxBuffer: 10 * 1024 * 1024,
@@ -242,7 +232,7 @@ export class ClaudeBridge {
       let proc;
       try {
         proc = spawn(bin, args, {
-          cwd: this.projectDir,
+          cwd: this.workspaceDir,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch {

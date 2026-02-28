@@ -545,26 +545,28 @@ async function stepAgentIdentity(): Promise<void> {
 
   const agentName = await askInput("Agent name", "Atlas");
 
-  // Generate data/system-prompt.md from template
-  const templatePath = path.join(PROJECT_ROOT, "data", "system-prompt.template.md");
-  const outPath = path.join(PROJECT_ROOT, "data", "system-prompt.md");
+  // Generate ~/.claude-agent/workspace/CLAUDE.md from template
+  const templatePath = path.join(PROJECT_ROOT, "data", "workspace-claude.template.md");
+  const workspaceDir = path.join(os.homedir(), ".claude-agent", "workspace");
+  const outPath = path.join(workspaceDir, "CLAUDE.md");
   if (fs.existsSync(templatePath)) {
     let shouldWrite = true;
     if (fs.existsSync(outPath)) {
       console.log();
-      warn("Existing system-prompt.md detected.");
+      warn("Existing workspace CLAUDE.md detected.");
       shouldWrite = await askYesNo("  Overwrite with new agent name?", false);
     }
     if (shouldWrite) {
+      fs.mkdirSync(workspaceDir, { recursive: true });
       const template = fs.readFileSync(templatePath, "utf-8");
       const content = template.replace(/\{AGENT_NAME\}/g, agentName);
       fs.writeFileSync(outPath, content, "utf-8");
-      ok(`System prompt written with agent name: ${agentName}`);
+      ok(`Workspace CLAUDE.md written with agent name: ${agentName}`);
     } else {
-      info("Keeping existing system-prompt.md.");
+      info("Keeping existing workspace CLAUDE.md.");
     }
   } else {
-    warn("Template data/system-prompt.template.md not found — skipping.");
+    warn("Template data/workspace-claude.template.md not found — skipping.");
   }
 
   // Update data/brain.md from template with agent name
