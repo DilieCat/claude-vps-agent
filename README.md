@@ -1,21 +1,20 @@
-# claude-vps-agent
+# claude-agent
 
-Run Claude Code on your own VPS with Telegram/Discord bot integrations, task scheduling, and MCP server support. 100% legal, no ban risk.
+Run Claude Code as a persistent agent on any machine -- VPS, homelab, laptop, or server. Includes Telegram/Discord bot integrations, task scheduling, and MCP server support. 100% official, no ban risk.
 
 ## Why?
 
-You want the functionality of remote AI agents (messaging integration, autonomous tasks, browser automation) but without violating Anthropic's Terms of Service. This project uses **only the official Claude Code CLI** — specifically `claude -p` (headless mode), which is explicitly designed for scripting and automation.
+You want the functionality of remote AI agents (messaging integration, autonomous tasks, browser automation) but without violating Anthropic's Terms of Service. This project uses **only the official Claude Code CLI** -- specifically `claude -p` (headless mode), which is explicitly designed for scripting and automation.
 
 **What's legal:**
-- Running Claude Code on a VPS via SSH ✅
-- Using `claude -p` for automation ✅
-- Building bot wrappers around `claude -p` ✅
-- Using MCP servers ✅
+- Running Claude Code on any server or machine via `claude -p`
+- Building bot wrappers and automations around the CLI
+- Using MCP servers for extended capabilities
 
 **What's NOT legal:**
-- Stealing OAuth tokens ❌
-- Spoofing Claude Code client headers ❌
-- Using unofficial third-party tools that bypass auth ❌
+- Stealing OAuth tokens
+- Spoofing Claude Code client headers
+- Using unofficial third-party tools that bypass auth
 
 ## Features
 
@@ -24,75 +23,40 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 | **Telegram Bot** | Message Claude from Telegram. Supports allowed users, typing indicators, long message splitting. |
 | **Discord Bot** | Slash commands (`/ask`, `/project`, `/model`). Thread-per-conversation. |
 | **Scheduler** | YAML-based cron tasks. Daily code reviews, dependency checks, custom prompts. |
-| **Infra** | One-command VPS setup. SSH hardening, firewall, Fail2Ban, systemd services. |
+| **Living Agent** | Persistent memory (brain system), session continuity, proactive notifications. |
+| **Infra** | Optional server provisioning script. SSH hardening, firewall, Fail2Ban, systemd services. |
 | **MCP Configs** | Pre-configured MCP servers for GitHub, filesystem, search, memory. |
 
 ## Quick Start
 
-### 1. Clone and configure
-
 ```bash
-git clone https://github.com/yourusername/claude-vps-agent.git
-cd claude-vps-agent
-
-# Option A: Interactive setup wizard (recommended)
-make setup            # or: python3 setup.py
-
-# Option B: Manual configuration
-cp .env.example .env
-# Edit .env with your tokens and VPS details
+git clone https://github.com/yourusername/claude-agent.git
+cd claude-agent
+python3 setup.py
 ```
 
 The setup wizard walks you through module selection, token configuration, dependency installation, and verification -- all in one step.
 
-### 2. Local development
+That's it. Once setup is done, start your services:
 
 ```bash
-make install          # Create venv and install all deps
-make telegram         # Run Telegram bot locally
-make discord          # Run Discord bot locally
-make scheduler        # Run scheduler locally
-```
-
-### 3. Deploy to VPS
-
-```bash
-# First time: provision the VPS
-make setup-vps
-
-# Authenticate Claude Code on VPS
-make auth
-
-# Deploy and start services
-make deploy
-
-# Check status
-make status
-```
-
-### 4. Docker (alternative)
-
-```bash
-docker compose --profile telegram up -d    # Start Telegram bot
-docker compose --profile discord up -d     # Start Discord bot
-docker compose --profile scheduler up -d   # Start scheduler
+make telegram         # Run Telegram bot
+make discord          # Run Discord bot
+make scheduler        # Run scheduler
+make start            # Start all enabled services
 ```
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│  Telegram    │────▶│              │────▶│                 │
-│  Bot         │◀────│  Claude      │◀────│  Claude Code    │
-└─────────────┘     │  Bridge      │     │  CLI (claude -p) │
-┌─────────────┐     │              │     │                 │
-│  Discord     │────▶│  (lib/       │────▶│  Your project   │
-│  Bot         │◀────│   claude_    │◀────│  files on VPS   │
-└─────────────┘     │   bridge.py) │     │                 │
-┌─────────────┐     │              │     │                 │
-│  Scheduler   │────▶│              │────▶│                 │
-│  (cron)      │◀────│              │◀────│                 │
-└─────────────┘     └──────────────┘     └─────────────────┘
+                       +----------------+     +-------------------+
+  Telegram Bot ------->|                |---->|                   |
+                <------|  Claude Bridge |<----|  Claude Code CLI  |
+  Discord Bot -------->|                |---->|  (claude -p)      |
+                <------|  (lib/         |<----|                   |
+  Scheduler ---------->|   claude_      |---->|  Your project     |
+                <------|   bridge.py)   |<----|  files             |
+                       +----------------+     +-------------------+
 ```
 
 All integrations go through `lib/claude_bridge.py`, which wraps `claude -p` with:
@@ -103,7 +67,7 @@ All integrations go through `lib/claude_bridge.py`, which wraps `claude -p` with
 
 ## Configuration
 
-All config is via environment variables. See [`.env.example`](.env.example) for all options.
+All config is via environment variables. Run `python3 setup.py` or see [`.env.example`](.env.example) for all options.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -111,27 +75,70 @@ All config is via environment variables. See [`.env.example`](.env.example) for 
 | `TELEGRAM_ALLOWED_USERS` | For Telegram | Comma-separated Telegram user IDs |
 | `DISCORD_BOT_TOKEN` | For Discord | Get from [Discord Developer Portal](https://discord.com/developers/applications) |
 | `DISCORD_ALLOWED_USERS` | For Discord | Comma-separated Discord user IDs |
-| `CLAUDE_PROJECT_DIR` | Yes | Directory Claude works in on VPS |
+| `CLAUDE_PROJECT_DIR` | Yes | Directory Claude works in |
 | `CLAUDE_MODEL` | No | Model to use (default: system default) |
 | `CLAUDE_ALLOWED_TOOLS` | No | Comma-separated tool whitelist |
 | `CLAUDE_MAX_BUDGET_USD` | No | Max spend per request |
 
-## VPS Setup
+## Service Management
 
-Recommended: **Hetzner CX22** (~€4/month, 2 vCPU, 4GB RAM)
+The Makefile auto-detects whether systemd is available and adapts accordingly:
 
-The setup script (`infra/setup-vps.sh`) handles:
-- System updates and essential packages
-- Dedicated `claude` user with SSH keys
-- SSH hardening (no root login, no password auth)
-- UFW firewall (ports 22 + 443 only)
-- Fail2Ban for brute-force protection
-- Node.js and Claude Code CLI installation
-- tmux for persistent sessions
+```bash
+make start            # Start all enabled services
+make stop             # Stop all services
+make restart          # Restart all services
+make status           # Show service status
+make logs             # Tail service logs (systemd only)
+```
 
-**Mobile access:**
-- Android: Termux → SSH → tmux attach
-- iPhone: Termius → SSH → tmux attach
+On a systemd-based server, these use `systemctl`. On a laptop or non-systemd machine, they manage background processes directly.
+
+## Living Agent
+
+Enable with `LIVING_MODE=true` in `.env`. This mode adds persistent memory, session continuity, and proactive notifications.
+
+**Brain system** -- Claude maintains a persistent markdown memory in `data/brain.md`, loaded before every interaction. This lets it remember context, preferences, and ongoing work across conversations.
+
+**Session continuity** -- Per-user session tracking stores each user's Claude session ID. Conversations resume automatically via `claude --resume`, so context is preserved between messages.
+
+**LivingBridge** -- An enhanced `ClaudeBridge` that combines brain loading, session management, and event logging into a single interface. Each user gets their own bridge instance with independent `/project` and `/model` settings.
+
+**Notification queue** -- The scheduler can push proactive messages to bot users (e.g. task results, reminders). Users opt in/out with `/notify`.
+
+**Bot commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/reset` | Clear your session and start fresh |
+| `/brain` | View the current brain state |
+| `/notify` | Toggle proactive notifications on/off |
+
+**Security:**
+- `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
+- File locking (`lib/filelock.py`) ensures multi-process safety for shared state files (brain, sessions)
+
+## Remote Deployment (Advanced)
+
+If you want to run this on a remote server managed from your laptop:
+
+```bash
+# 1. Provision the server (installs deps, hardens SSH, sets up firewall)
+make provision-remote
+
+# 2. Authenticate Claude Code on the server via SSH tunnel
+make auth-remote
+
+# 3. Deploy and start services
+make deploy-remote
+
+# 4. Check status
+make status
+```
+
+The provisioning script (`infra/setup-vps.sh`) handles: system updates, dedicated user creation, SSH hardening, UFW firewall, Fail2Ban, Node.js and Claude Code CLI installation, and tmux for persistent sessions.
+
+Recommended for remote hosting: **Hetzner CX22** (~4 EUR/month, 2 vCPU, 4GB RAM).
 
 ## MCP Servers
 
@@ -150,49 +157,13 @@ Copy to your Claude Code config:
 cp config/mcp-servers.json ~/.claude/mcp-servers.json
 ```
 
-## Costs
-
-| Component | Monthly cost |
-|-----------|-------------|
-| Claude Max subscription | $100 |
-| Hetzner VPS (CX22) | ~€4 |
-| Tailscale | Free (personal) |
-| Telegram Bot API | Free |
-| Discord Bot | Free |
-| **Total** | **~$105/mo** |
-
-## Living Agent
-
-Enable with `LIVING_MODE=true` in `.env`. This mode adds persistent memory, session continuity, and proactive notifications.
-
-**Brain system** -- Claude maintains a persistent markdown memory in `data/brain.md`, loaded before every interaction. This lets it remember context, preferences, and ongoing work across conversations.
-
-**Session continuity** -- Per-user session tracking stores each user's Claude session ID. Conversations resume automatically via `claude --resume`, so context is preserved between messages.
-
-**LivingBridge** -- An enhanced `ClaudeBridge` that combines brain loading, session management, and event logging into a single interface. Each user gets their own bridge instance with independent `/project` and `/model` settings.
-
-**Notification queue** -- The scheduler can push proactive messages to bot users (e.g. task results, reminders). Users opt in/out with `/notify`.
-
-**New bot commands:**
-
-| Command | Description |
-|---------|-------------|
-| `/reset` | Clear your session and start fresh |
-| `/brain` | View the current brain state |
-| `/notify` | Toggle proactive notifications on/off |
-
-**Security:**
-- `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
-- File locking (`lib/filelock.py`) ensures multi-process safety for shared state files (brain, sessions)
-
 ## Security
 
-- All auth via SSH keys (no passwords)
-- Firewall allows only ports 22 and 443
-- Fail2Ban blocks brute-force attempts
 - Bot access restricted to allowed user IDs
-- Optional: Tailscale for zero-trust VPN
 - No OAuth tokens or credentials are shared with third parties
+- Uses only the official Claude Code CLI
+- Optional: SSH key-only auth, firewall, Fail2Ban (via provisioning script)
+- Optional: Tailscale for zero-trust VPN
 
 ## License
 

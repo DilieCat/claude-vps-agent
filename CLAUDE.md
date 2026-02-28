@@ -1,11 +1,11 @@
-# claude-vps-agent
+# claude-agent
 
-A modular, self-hostable toolkit for running Claude Code on a VPS with messaging bot integrations, scheduling, and MCP server support.
+A modular, self-hostable toolkit for running Claude Code as a persistent agent with messaging bot integrations, scheduling, and MCP server support. Runs on any machine (VPS, homelab, laptop, server).
 
 ## Project Structure
 
 ```
-claude-vps-agent/
+claude-agent/
 ├── lib/claude_bridge.py        # Shared wrapper around `claude -p`
 ├── lib/brain.py                # Persistent markdown memory (brain system)
 ├── lib/session_store.py        # Per-user session tracking
@@ -14,12 +14,12 @@ claude-vps-agent/
 ├── bots/telegram/              # Telegram bot module
 ├── bots/discord/               # Discord bot module
 ├── scheduler/                  # YAML-based task scheduler
-├── infra/                      # VPS setup, systemd, deploy scripts
+├── infra/                      # Server provisioning, systemd, deploy scripts
 ├── config/                     # MCP server configs
 ├── data/brain.md               # Persistent brain memory (runtime state)
 ├── data/brain.template.md      # Brain template for new setups
 ├── .env.example                # Environment variable template
-├── Makefile                    # Build/install targets
+├── Makefile                    # Local-first build/run targets + remote deployment
 ├── docker-compose.yml          # Optional Docker setup
 └── README.md                   # User-facing documentation
 ```
