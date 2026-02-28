@@ -6,9 +6,50 @@
  *   - Living:    LivingBridge (brain-aware, session-persistent, proactive)
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { Brain } from "./brain.js";
 import { SessionStore } from "./session-store.js";
+
+/**
+ * Resolve the full path to the `claude` CLI binary.
+ * Background processes (systemd, make start) often have a minimal PATH
+ * that doesn't include npm global bin directories.
+ */
+function findClaudeBinary(): string {
+  // 1. Check CLAUDE_BIN env var (explicit override)
+  if (process.env["CLAUDE_BIN"]) return process.env["CLAUDE_BIN"];
+
+  // 2. Try `which claude` (works if PATH is correct)
+  try {
+    const result = execFileSync("which", ["claude"], { stdio: "pipe", encoding: "utf-8" });
+    const found = result.trim();
+    if (found) return found;
+  } catch { /* not in PATH */ }
+
+  // 3. Check common installation locations
+  const candidates = [
+    "/usr/local/bin/claude",
+    "/usr/bin/claude",
+    path.join(process.env["HOME"] ?? "", ".npm-global", "bin", "claude"),
+    path.join(process.env["HOME"] ?? "", ".local", "bin", "claude"),
+    // nvm locations
+    ...(process.env["NVM_DIR"]
+      ? [path.join(process.env["NVM_DIR"], "versions", "node", "*", "bin", "claude")]
+      : []),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate.includes("*")) continue; // skip globs
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  // 4. Fallback: just "claude" and hope for the best
+  return "claude";
+}
+
+const CLAUDE_BIN = findClaudeBinary();
 
 /** Structured response from a `claude -p` invocation. */
 export interface ClaudeResponse {
@@ -80,7 +121,7 @@ export class ClaudeBridge {
 
   /** Build the claude CLI command. */
   buildCommand(prompt: string, resumeSession?: string): string[] {
-    const cmd = ["claude", "-p", prompt, "--output-format", "json"];
+    const cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"];
 
     if (resumeSession) {
       cmd.push("--resume", resumeSession);
