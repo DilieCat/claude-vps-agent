@@ -161,6 +161,30 @@ cp config/mcp-servers.json ~/.claude/mcp-servers.json
 | Discord Bot | Free |
 | **Total** | **~$105/mo** |
 
+## Living Agent
+
+Enable with `LIVING_MODE=true` in `.env`. This mode adds persistent memory, session continuity, and proactive notifications.
+
+**Brain system** -- Claude maintains a persistent markdown memory in `data/brain.md`, loaded before every interaction. This lets it remember context, preferences, and ongoing work across conversations.
+
+**Session continuity** -- Per-user session tracking stores each user's Claude session ID. Conversations resume automatically via `claude --resume`, so context is preserved between messages.
+
+**LivingBridge** -- An enhanced `ClaudeBridge` that combines brain loading, session management, and event logging into a single interface. Each user gets their own bridge instance with independent `/project` and `/model` settings.
+
+**Notification queue** -- The scheduler can push proactive messages to bot users (e.g. task results, reminders). Users opt in/out with `/notify`.
+
+**New bot commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/reset` | Clear your session and start fresh |
+| `/brain` | View the current brain state |
+| `/notify` | Toggle proactive notifications on/off |
+
+**Security:**
+- `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
+- File locking (`lib/filelock.py`) ensures multi-process safety for shared state files (brain, sessions)
+
 ## Security
 
 - All auth via SSH keys (no passwords)

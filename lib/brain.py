@@ -19,6 +19,8 @@ import re
 import datetime
 from pathlib import Path
 
+from lib.filelock import FileLock, atomic_write
+
 DEFAULT_BRAIN_PATH = Path(__file__).resolve().parent.parent / "data" / "brain.md"
 
 # Maximum events to keep in recent history
@@ -50,8 +52,8 @@ class Brain:
         self._content = self.path.read_text()
 
     def save(self) -> None:
-        """Write current brain state to disk."""
-        self.path.write_text(self._content)
+        """Write current brain state to disk atomically."""
+        atomic_write(self.path, self._content)
 
     def get_context(self) -> str:
         """Return the full brain content for injection into a claude prompt."""
@@ -75,33 +77,46 @@ class Brain:
 
     def get_section(self, heading: str) -> str:
         """Extract content under a specific ## heading."""
-        pattern = rf"## {re.escape(heading)}\n(.*?)(?=\n## |\Z)"
-        match = re.search(pattern, self._content, re.DOTALL)
+        pattern = rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)"
+        match = re.search(pattern, self._content, re.DOTALL | re.MULTILINE)
         return match.group(1).strip() if match else ""
 
     def update_section(self, heading: str, content: str) -> None:
-        """Replace content under a specific ## heading."""
-        pattern = rf"(## {re.escape(heading)}\n).*?(?=\n## |\Z)"
-        replacement = rf"\g<1>{content}\n"
-        new_content = re.sub(pattern, replacement, self._content, flags=re.DOTALL)
+        """Replace content under a specific ## heading (locked, atomic)."""
+        with FileLock(self.path):
+            self.reload()
+            self._apply_section_update(heading, content)
+            self.save()
+
+    def _apply_section_update(self, heading: str, content: str) -> None:
+        """Internal: modify self._content for a section (caller must hold lock)."""
+        pattern = rf"(^## {re.escape(heading)}\n).*?(?=^## |\Z)"
+        new_content = re.sub(
+            pattern,
+            lambda m: m.group(1) + content + "\n",
+            self._content,
+            flags=re.DOTALL | re.MULTILINE,
+        )
         if new_content == self._content:
-            # Section didn't exist, append it
-            self._content = self._content.rstrip() + f"\n\n## {heading}\n{content}\n"
+            # Section didn't exist — but check if it exists with same content
+            if not self.get_section(heading):
+                self._content = self._content.rstrip() + f"\n\n## {heading}\n{content}\n"
         else:
             self._content = new_content
-        self.save()
 
     def add_event(self, event: str) -> None:
         """Add a timestamped event to the Recent History section."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         entry = f"- [{timestamp}] {event}"
 
-        history = self.get_section("Recent History")
-        lines = [l for l in history.split("\n") if l.strip()]
-        lines.insert(0, entry)
-        lines = lines[:MAX_EVENTS]
-
-        self.update_section("Recent History", "\n".join(lines))
+        with FileLock(self.path):
+            self.reload()
+            history = self.get_section("Recent History")
+            lines = [l for l in history.split("\n") if l.strip()]
+            lines.insert(0, entry)
+            lines = lines[:MAX_EVENTS]
+            self._apply_section_update("Recent History", "\n".join(lines))
+            self.save()
 
     def get_user_pref(self, key: str) -> str | None:
         """Get a specific user preference by key."""

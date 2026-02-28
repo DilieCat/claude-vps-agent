@@ -8,9 +8,12 @@ Usage:
 """
 
 import asyncio
+import copy
+import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -39,6 +42,13 @@ CLAUDE_ALLOWED_TOOLS = os.getenv("CLAUDE_ALLOWED_TOOLS", "")
 
 DISCORD_MAX_LEN = 2000  # Discord message character limit
 NOTIFICATION_POLL_INTERVAL = 60  # seconds between notification checks
+
+ALLOWED_PROJECT_BASE: str = os.path.realpath(
+    os.getenv("ALLOWED_PROJECT_BASE", os.path.expanduser("~"))
+)
+
+# Per-user settings: maps user_id -> {"project_dir": ..., "model": ...}
+_user_settings: dict[str, dict[str, str | None]] = {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,8 +91,23 @@ if living_mode:
     except Exception as exc:
         logger.warning("NotificationQueue init failed (%s), notifications disabled.", exc)
 
-# Per-user notification toggle: set of user IDs that have opted in
-notify_opted_in: set[str] = set()
+# Per-user notification toggle — persisted to disk
+DISCORD_NOTIFY_PREFS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "discord_notify_prefs.json"
+
+
+def _load_notify_prefs() -> dict:
+    DISCORD_NOTIFY_PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if DISCORD_NOTIFY_PREFS_PATH.exists():
+        try:
+            return json.loads(DISCORD_NOTIFY_PREFS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_notify_prefs(prefs: dict) -> None:
+    DISCORD_NOTIFY_PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DISCORD_NOTIFY_PREFS_PATH.write_text(json.dumps(prefs, indent=2))
 
 # ---------------------------------------------------------------------------
 # Bot setup
@@ -117,6 +142,27 @@ def is_allowed(user: discord.User | discord.Member) -> bool:
     if not DISCORD_ALLOWED_USERS:
         return True  # no allowlist configured => everyone allowed
     return str(user.id) in DISCORD_ALLOWED_USERS or str(user) in DISCORD_ALLOWED_USERS
+
+
+def _validate_project_path(path: str) -> str | None:
+    """Canonicalize *path* and return it if inside ALLOWED_PROJECT_BASE, else None."""
+    real = os.path.realpath(os.path.expanduser(path))
+    if not real.startswith(ALLOWED_PROJECT_BASE + os.sep) and real != ALLOWED_PROJECT_BASE:
+        return None
+    return real
+
+
+def _get_user_bridge(user_id: str) -> ClaudeBridge:
+    """Return a bridge configured with *user_id*'s settings (or the default)."""
+    settings = _user_settings.get(user_id)
+    if not settings:
+        return bridge
+    user_bridge = copy.copy(bridge)
+    if settings.get("project_dir") is not None:
+        user_bridge.project_dir = settings["project_dir"]
+    if settings.get("model") is not None:
+        user_bridge.model = settings["model"]
+    return user_bridge
 
 
 def split_message(text: str, limit: int = DISCORD_MAX_LEN) -> list[str]:
@@ -163,11 +209,21 @@ async def ask_claude(prompt: str, interaction: discord.Interaction) -> None:
     thinking_msg = await thread.send("Thinking...")
 
     # Typing indicator while Claude works
-    async with thread.typing():
-        if living_mode:
-            response = await bridge.ask_as("discord", user_id, prompt)
-        else:
-            response = await bridge.ask_async(prompt)
+    user_bridge = _get_user_bridge(user_id)
+    try:
+        async with thread.typing():
+            if living_mode:
+                response = await user_bridge.ask_as("discord", user_id, prompt)
+            else:
+                response = await user_bridge.ask_async(prompt)
+    except Exception:
+        logger.exception("Bridge call failed")
+        await thinking_msg.delete()
+        await thread.send(
+            "Sorry, something went wrong while contacting Claude. "
+            "Please try again later."
+        )
+        return
 
     # Delete the "Thinking..." placeholder
     await thinking_msg.delete()
@@ -199,28 +255,29 @@ async def _notification_poller() -> None:
     while not bot.is_closed():
         try:
             notifications = notification_queue.pop_all("discord")
+            prefs = _load_notify_prefs()
+            opted_in = [uid for uid, enabled in prefs.items() if enabled]
+
             for note in notifications:
                 recipient_id = note.get("user_id")
                 message = note.get("message", "")
-
-                if recipient_id is None:
-                    # Broadcast — skip if no opted-in users
-                    logger.info("Broadcast notification (no specific user), skipping for now.")
+                if not message:
                     continue
 
-                # Only deliver if user has opted in
-                if recipient_id not in notify_opted_in:
-                    logger.debug(
-                        "Skipping notification for %s (not opted in).", recipient_id
-                    )
-                    continue
+                # Determine recipients: specific user or all opted-in (broadcast)
+                if recipient_id is not None:
+                    recipients = [str(recipient_id)] if prefs.get(str(recipient_id), False) else []
+                else:
+                    recipients = opted_in
 
-                try:
-                    user = await bot.fetch_user(int(recipient_id))
-                    if user:
-                        await user.send(f"**Notification:**\n{message}")
-                except Exception as exc:
-                    logger.error("Failed to deliver notification to %s: %s", recipient_id, exc)
+                for recipient in recipients:
+                    try:
+                        user = await bot.fetch_user(int(recipient))
+                        if user:
+                            await user.send(f"**Notification:**\n{message}")
+                            logger.info("Sent notification to user %s", recipient)
+                    except Exception as exc:
+                        logger.error("Failed to deliver notification to %s: %s", recipient, exc)
         except Exception as exc:
             logger.error("Notification poller error: %s", exc)
 
@@ -279,8 +336,13 @@ async def cmd_brain(interaction: discord.Interaction) -> None:
 
     brain_content = bridge.brain.get_context()
     # Truncate if too long for Discord
-    if len(brain_content) > DISCORD_MAX_LEN - 20:
-        brain_content = brain_content[: DISCORD_MAX_LEN - 20] + "\n\n*[truncated]*"
+    # Wrapper: "```markdown\n" (12) + "\n```" (4) = 16 chars
+    # Truncation suffix: "\n\n*[truncated]*" = 16 chars
+    wrapper_overhead = len("```markdown\n") + len("\n```")
+    truncation_suffix = "\n\n*[truncated]*"
+    max_content = DISCORD_MAX_LEN - wrapper_overhead
+    if len(brain_content) > max_content:
+        brain_content = brain_content[: max_content - len(truncation_suffix)] + truncation_suffix
     await interaction.response.send_message(f"```markdown\n{brain_content}\n```")
 
 
@@ -299,16 +361,19 @@ async def cmd_notify(interaction: discord.Interaction) -> None:
         return
 
     user_id = str(interaction.user.id)
-    if user_id in notify_opted_in:
-        notify_opted_in.discard(user_id)
-        await interaction.response.send_message(
-            "Proactive notifications **disabled**. Use `/notify` again to re-enable.", ephemeral=True
-        )
-    else:
-        notify_opted_in.add(user_id)
+    prefs = _load_notify_prefs()
+    new_state = not prefs.get(user_id, False)
+    prefs[user_id] = new_state
+    _save_notify_prefs(prefs)
+
+    if new_state:
         await interaction.response.send_message(
             "Proactive notifications **enabled**. The agent will DM you when it has updates. "
             "Use `/notify` again to disable.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            "Proactive notifications **disabled**. Use `/notify` again to re-enable.", ephemeral=True
         )
 
 
@@ -321,17 +386,25 @@ async def cmd_project(interaction: discord.Interaction, path: str | None = None)
         )
         return
 
+    user_id = str(interaction.user.id)
     if path:
-        if not os.path.isdir(path):
+        validated = _validate_project_path(path)
+        if validated is None:
             await interaction.response.send_message(
-                f"Directory not found: `{path}`", ephemeral=True
+                f"Path rejected: must be inside `{ALLOWED_PROJECT_BASE}`", ephemeral=True
             )
             return
-        bridge.project_dir = path
-        await interaction.response.send_message(f"Project directory set to: `{path}`")
+        if not os.path.isdir(validated):
+            await interaction.response.send_message(
+                f"Directory not found: `{validated}`", ephemeral=True
+            )
+            return
+        _user_settings.setdefault(user_id, {})["project_dir"] = validated
+        await interaction.response.send_message(f"Project directory set to: `{validated}`")
     else:
+        user_bridge = _get_user_bridge(user_id)
         await interaction.response.send_message(
-            f"Current project directory: `{bridge.project_dir}`"
+            f"Current project directory: `{user_bridge.project_dir}`"
         )
 
 
@@ -344,11 +417,13 @@ async def cmd_model(interaction: discord.Interaction, name: str | None = None) -
         )
         return
 
+    user_id = str(interaction.user.id)
     if name:
-        bridge.model = name
+        _user_settings.setdefault(user_id, {})["model"] = name
         await interaction.response.send_message(f"Model set to: `{name}`")
     else:
-        current = bridge.model or "(default)"
+        user_bridge = _get_user_bridge(user_id)
+        current = user_bridge.model or "(default)"
         await interaction.response.send_message(f"Current model: `{current}`")
 
 

@@ -193,7 +193,6 @@ def _make_bridge(task: dict) -> ClaudeBridge | LivingBridge:
 
 # Shared instances — initialised lazily in run_task
 _notifier: NotificationQueue | None = None
-_brain = None  # lib.brain.Brain
 
 
 def _get_notifier() -> NotificationQueue:
@@ -201,14 +200,6 @@ def _get_notifier() -> NotificationQueue:
     if _notifier is None:
         _notifier = NotificationQueue()
     return _notifier
-
-
-def _get_brain():
-    global _brain
-    if _brain is None:
-        from lib.brain import Brain
-        _brain = Brain()
-    return _brain
 
 
 def run_task(task: dict) -> None:
@@ -248,7 +239,14 @@ def run_task(task: dict) -> None:
     log_file.write_text(log_content)
 
     # --- Log to brain ---
-    brain = _get_brain()
+    # Use the bridge's brain if it's a LivingBridge (which already has one),
+    # otherwise create a standalone Brain instance for event logging.
+    if isinstance(bridge, LivingBridge):
+        brain = bridge.brain
+    else:
+        from lib.brain import Brain
+        brain = Brain()
+
     if response.is_error:
         logger.error("Task '%s' failed (exit %d): %s",
                       task["name"], response.exit_code,

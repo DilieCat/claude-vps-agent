@@ -7,11 +7,17 @@ A modular, self-hostable toolkit for running Claude Code on a VPS with messaging
 ```
 claude-vps-agent/
 ├── lib/claude_bridge.py        # Shared wrapper around `claude -p`
+├── lib/brain.py                # Persistent markdown memory (brain system)
+├── lib/session_store.py        # Per-user session tracking
+├── lib/notifier.py             # Notification queue for proactive messages
+├── lib/filelock.py             # Cross-process file locking
 ├── bots/telegram/              # Telegram bot module
 ├── bots/discord/               # Discord bot module
 ├── scheduler/                  # YAML-based task scheduler
 ├── infra/                      # VPS setup, systemd, deploy scripts
 ├── config/                     # MCP server configs
+├── data/brain.md               # Persistent brain memory (runtime state)
+├── data/brain.template.md      # Brain template for new setups
 ├── .env.example                # Environment variable template
 ├── Makefile                    # Build/install targets
 ├── docker-compose.yml          # Optional Docker setup

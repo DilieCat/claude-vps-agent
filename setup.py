@@ -350,7 +350,7 @@ def step_generate_env(env_vars: dict[str, str]) -> None:
         section_lines: list[str] = []
         for k in keys:
             if k in env_vars:
-                section_lines.append(f"{k}={env_vars[k]}")
+                section_lines.append(f'{k}="{env_vars[k]}"')
         if section_lines:
             lines.append(f"# {section_name}")
             lines.extend(section_lines)
@@ -363,6 +363,7 @@ def step_generate_env(env_vars: dict[str, str]) -> None:
 
     with open(ENV_FILE, "w") as f:
         f.write(content)
+    os.chmod(ENV_FILE, 0o600)
 
     success(f".env written to [cyan]{ENV_FILE}[/cyan]")
 

@@ -60,6 +60,10 @@ logs: ## Tail logs from VPS services
 
 lint: ## Run linting on Python code
 	.venv/bin/python -m py_compile lib/claude_bridge.py
+	.venv/bin/python -m py_compile lib/brain.py
+	.venv/bin/python -m py_compile lib/session_store.py
+	.venv/bin/python -m py_compile lib/notifier.py
+	.venv/bin/python -m py_compile lib/filelock.py
 	.venv/bin/python -m py_compile bots/telegram/bot.py
 	.venv/bin/python -m py_compile bots/discord/bot.py
 	.venv/bin/python -m py_compile scheduler/scheduler.py

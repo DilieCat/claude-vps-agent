@@ -6,6 +6,7 @@ Falls back to stateless ClaudeBridge if LivingBridge fails to initialise.
 Configure via environment variables (see README.md).
 """
 
+import copy
 import json
 import logging
 import os
@@ -66,6 +67,13 @@ if _raw.strip():
 TELEGRAM_MAX_LEN = 4096
 NOTIFY_PREFS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "notify_prefs.json"
 NOTIFICATION_CHECK_INTERVAL = 60  # seconds
+
+ALLOWED_PROJECT_BASE: str = os.path.realpath(
+    os.getenv("ALLOWED_PROJECT_BASE", os.path.expanduser("~"))
+)
+
+# Per-user settings: maps user_id -> {"project_dir": ..., "model": ...}
+_user_settings: dict[int, dict[str, str | None]] = {}
 
 # ---------------------------------------------------------------------------
 # Bridge instance — try LivingBridge first, fall back to ClaudeBridge
@@ -143,6 +151,27 @@ def _is_allowed(user_id: int) -> bool:
     if not ALLOWED_USERS:
         return True
     return user_id in ALLOWED_USERS
+
+
+def _validate_project_path(path: str) -> str | None:
+    """Canonicalize *path* and return it if inside ALLOWED_PROJECT_BASE, else None."""
+    real = os.path.realpath(os.path.expanduser(path))
+    if not real.startswith(ALLOWED_PROJECT_BASE + os.sep) and real != ALLOWED_PROJECT_BASE:
+        return None
+    return real
+
+
+def _get_user_bridge(user_id: int) -> ClaudeBridge:
+    """Return a bridge configured with *user_id*'s settings (or the default)."""
+    settings = _user_settings.get(user_id)
+    if not settings:
+        return bridge
+    user_bridge = copy.copy(bridge)
+    if settings.get("project_dir") is not None:
+        user_bridge.project_dir = settings["project_dir"]
+    if settings.get("model") is not None:
+        user_bridge.model = settings["model"]
+    return user_bridge
 
 
 def _split_message(text: str, limit: int = TELEGRAM_MAX_LEN) -> list[str]:
@@ -228,36 +257,46 @@ async def cmd_project(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update.effective_user.id):
         return
 
+    user_id = update.effective_user.id
     path = " ".join(ctx.args) if ctx.args else ""
     if not path:
+        user_bridge = _get_user_bridge(user_id)
         await update.message.reply_text(
-            f"Current project directory: {bridge.project_dir}\n\n"
+            f"Current project directory: {user_bridge.project_dir}\n\n"
             "Usage: /project <path>"
         )
         return
 
-    path = os.path.expanduser(path)
-    if not os.path.isdir(path):
-        await update.message.reply_text(f"Directory not found: {path}")
+    validated = _validate_project_path(path)
+    if validated is None:
+        await update.message.reply_text(
+            f"Path rejected: must be inside {ALLOWED_PROJECT_BASE}"
+        )
         return
 
-    bridge.project_dir = path
-    await update.message.reply_text(f"Project directory set to: {path}")
+    if not os.path.isdir(validated):
+        await update.message.reply_text(f"Directory not found: {validated}")
+        return
+
+    _user_settings.setdefault(user_id, {})["project_dir"] = validated
+    await update.message.reply_text(f"Project directory set to: {validated}")
 
 
 async def cmd_model(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update.effective_user.id):
         return
 
+    user_id = update.effective_user.id
     model = " ".join(ctx.args) if ctx.args else ""
     if not model:
-        current = bridge.model or "(default)"
+        user_bridge = _get_user_bridge(user_id)
+        current = user_bridge.model or "(default)"
         await update.message.reply_text(
             f"Current model: {current}\n\nUsage: /model <model-name>"
         )
         return
 
-    bridge.model = model
+    _user_settings.setdefault(user_id, {})["model"] = model
     await update.message.reply_text(f"Model set to: {model}")
 
 
@@ -328,13 +367,14 @@ async def _handle_prompt(update: Update, prompt: str) -> None:
     """Send *prompt* to Claude via the bridge and reply with the result."""
     await update.message.chat.send_action(ChatAction.TYPING)
 
+    user_bridge = _get_user_bridge(update.effective_user.id)
     try:
         if _living_mode and isinstance(bridge, LivingBridge):
-            response = await bridge.ask_as(
+            response = await user_bridge.ask_as(
                 "telegram", str(update.effective_user.id), prompt
             )
         else:
-            response = await bridge.ask_async(prompt)
+            response = await user_bridge.ask_async(prompt)
     except Exception:
         logger.exception("Bridge call failed")
         await update.message.reply_text(

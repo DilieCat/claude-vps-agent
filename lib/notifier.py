@@ -17,10 +17,11 @@ Usage:
 
 import json
 import logging
-import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+from lib.filelock import FileLock, atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +40,14 @@ class Notification:
 
 
 class NotificationQueue:
-    """Thread-safe notification queue backed by a JSON file."""
+    """Process-safe notification queue backed by a JSON file."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else DEFAULT_QUEUE_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
 
     def _load(self) -> list[dict]:
-        """Load the queue from disk."""
+        """Load the queue from disk (caller must hold the file lock)."""
         if not self.path.exists():
             return []
         try:
@@ -58,8 +58,8 @@ class NotificationQueue:
             return []
 
     def _save(self, entries: list[dict]) -> None:
-        """Persist the queue to disk."""
-        self.path.write_text(json.dumps(entries, indent=2))
+        """Persist the queue to disk atomically (caller must hold the file lock)."""
+        atomic_write(self.path, json.dumps(entries, indent=2))
 
     def push(self, platform: str, user_id: str, message: str, source: str = "") -> None:
         """Queue a notification for a specific user on a platform."""
@@ -69,7 +69,7 @@ class NotificationQueue:
             message=message,
             source=source,
         )
-        with self._lock:
+        with FileLock(self.path):
             entries = self._load()
             entries.append(asdict(notif))
             self._save(entries)
@@ -83,7 +83,7 @@ class NotificationQueue:
             message=message,
             source=source,
         )
-        with self._lock:
+        with FileLock(self.path):
             entries = self._load()
             entries.append(asdict(notif))
             self._save(entries)
@@ -91,7 +91,7 @@ class NotificationQueue:
 
     def pop_all(self, platform: str) -> list[dict]:
         """Return and remove all queued notifications for a platform."""
-        with self._lock:
+        with FileLock(self.path):
             entries = self._load()
             matched = [e for e in entries if e.get("platform") == platform]
             remaining = [e for e in entries if e.get("platform") != platform]
