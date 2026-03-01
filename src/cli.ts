@@ -11,23 +11,16 @@ import { spawn, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pc from "picocolors";
+import { createSpinner } from "nanospinner";
+import figlet from "figlet";
+import gradient from "gradient-string";
+import boxen from "boxen";
 
 // ── Paths ────────────────────────────────────────────────────────────
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PIDS_DIR = path.join(ROOT, ".pids");
 const LOGS_DIR = path.join(ROOT, "logs");
-
-// ── ANSI helpers (no deps) ───────────────────────────────────────────
-const c = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  cyan: "\x1b[36m",
-  white: "\x1b[37m",
-};
 
 // ── Service definitions ──────────────────────────────────────────────
 interface ServiceDef {
@@ -92,11 +85,19 @@ function resolveServices(arg?: string): ServiceKey[] {
   const key = arg.toLowerCase();
   if (!(key in SERVICES)) {
     console.error(
-      `${c.red}Unknown service: ${arg}${c.reset}\nAvailable: ${SERVICE_KEYS.join(", ")}`,
+      pc.red(`Unknown service: ${arg}`) + `\nAvailable: ${SERVICE_KEYS.join(", ")}`,
     );
     process.exit(1);
   }
   return [key];
+}
+
+// ── Banner ────────────────────────────────────────────────────────────
+
+function printBanner(): void {
+  const ascii = figlet.textSync("claudebridge", { font: "Small" });
+  console.log(gradient.atlas(ascii));
+  console.log(pc.dim("  process manager for Claude Code services\n"));
 }
 
 // ── Commands ─────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ async function startService(service: ServiceKey): Promise<void> {
 
   if (!fs.existsSync(scriptPath)) {
     console.log(
-      `  ${c.yellow}${def.name}${c.reset}: script not found (${def.script}), skipping`,
+      `  ${pc.yellow(def.name)}: script not found (${def.script}), skipping`,
     );
     return;
   }
@@ -116,10 +117,12 @@ async function startService(service: ServiceKey): Promise<void> {
   const existingPgid = readPgid(service);
   if (existingPgid !== null && isAlive(existingPgid)) {
     console.log(
-      `  ${c.cyan}${def.name}${c.reset}: already running (PGID ${existingPgid})`,
+      `  ${pc.cyan(def.name)}: already running ${pc.dim(`(PGID ${existingPgid})`)}`,
     );
     return;
   }
+
+  const spinner = createSpinner(`Starting ${pc.bold(def.name)}...`).start();
 
   ensureDir(PIDS_DIR);
   ensureDir(LOGS_DIR);
@@ -137,13 +140,13 @@ async function startService(service: ServiceKey): Promise<void> {
     });
   } catch (err) {
     fs.closeSync(logFd);
-    console.log(`  ${c.red}${def.name}${c.reset}: failed to spawn — ${err}`);
+    spinner.error({ text: `${pc.bold(def.name)}: failed to spawn — ${err}` });
     return;
   }
 
   if (!child.pid) {
     fs.closeSync(logFd);
-    console.log(`  ${c.red}${def.name}${c.reset}: failed to start (no PID)`);
+    spinner.error({ text: `${pc.bold(def.name)}: failed to start (no PID)` });
     return;
   }
 
@@ -153,14 +156,16 @@ async function startService(service: ServiceKey): Promise<void> {
   child.unref();
   fs.closeSync(logFd);
 
-  console.log(
-    `  ${c.green}${def.name}${c.reset}: started (PGID ${pgid})  -> logs/${service}.log`,
-  );
+  spinner.success({
+    text: `${pc.bold(def.name)}: ${pc.green("started")} ${pc.dim(`(PGID ${pgid})`)}  → ${pc.dim(`logs/${service}.log`)}`,
+  });
 }
 
 async function stopService(service: ServiceKey): Promise<void> {
   const def = SERVICES[service];
   const pgid = readPgid(service);
+
+  const spinner = createSpinner(`Stopping ${pc.bold(def.name)}...`).start();
 
   let killed = false;
 
@@ -204,16 +209,18 @@ async function stopService(service: ServiceKey): Promise<void> {
   const file = pidFile(service);
   if (fs.existsSync(file)) fs.unlinkSync(file);
 
-  console.log(`  ${c.red}${def.name}${c.reset}: stopped`);
+  spinner.success({ text: `${pc.bold(def.name)}: ${pc.red("stopped")}` });
 }
 
 function statusAll(): void {
-  const header = `${c.bold}${c.white}  Service            Status       PGID      Uptime${c.reset}`;
+  console.log();
+
+  const header =
+    pc.bold("  Service            Status       PGID      Uptime");
   const separator = `  ${"─".repeat(52)}`;
 
-  console.log();
   console.log(header);
-  console.log(separator);
+  console.log(pc.dim(separator));
 
   for (const service of SERVICE_KEYS) {
     const def = SERVICES[service];
@@ -222,19 +229,19 @@ function statusAll(): void {
 
     const nameCol = def.name.padEnd(18);
     const statusCol = alive
-      ? `${c.green}running${c.reset}     `
-      : `${c.dim}stopped${c.reset}     `;
-    const pgidCol = alive ? String(pgid).padEnd(9) : `${c.dim}-${c.reset}`.padEnd(9 + c.dim.length + c.reset.length);
+      ? pc.green("running") + "     "
+      : pc.dim("stopped") + "     ";
+    const pgidCol = alive ? String(pgid).padEnd(9) : pc.dim("-").padEnd(9);
 
-    let uptimeCol = `${c.dim}-${c.reset}`;
+    let uptimeCol = pc.dim("-");
     if (alive) {
       const pidFilePath = pidFile(service);
       try {
         const stat = fs.statSync(pidFilePath);
         const secs = Math.floor((Date.now() - stat.mtimeMs) / 1000);
-        uptimeCol = formatUptime(secs);
+        uptimeCol = pc.cyan(formatUptime(secs));
       } catch {
-        uptimeCol = `${c.dim}?${c.reset}`;
+        uptimeCol = pc.dim("?");
       }
     }
 
@@ -249,11 +256,11 @@ function showLogs(service?: string): void {
   for (const svc of services) {
     const logPath = path.join(LOGS_DIR, `${svc}.log`);
     if (!fs.existsSync(logPath)) {
-      console.log(`${c.dim}No log file for ${SERVICES[svc].name}${c.reset}`);
+      console.log(pc.dim(`No log file for ${SERVICES[svc].name}`));
       continue;
     }
     console.log(
-      `\n${c.bold}${c.cyan}── ${SERVICES[svc].name} ──${c.reset}\n`,
+      `\n${pc.bold(pc.cyan(`── ${SERVICES[svc].name} ──`))}\n`,
     );
     try {
       const output = execSync(`tail -n 40 '${logPath}'`, {
@@ -261,7 +268,7 @@ function showLogs(service?: string): void {
       });
       console.log(output);
     } catch {
-      console.log(`${c.dim}(empty)${c.reset}`);
+      console.log(pc.dim("(empty)"));
     }
   }
 }
@@ -269,7 +276,7 @@ function showLogs(service?: string): void {
 async function runSetup(): Promise<void> {
   const setupPath = path.join(ROOT, "setup.ts");
   if (!fs.existsSync(setupPath)) {
-    console.error(`${c.red}setup.ts not found${c.reset}`);
+    console.error(pc.red("setup.ts not found"));
     process.exit(1);
   }
   const child = spawn("npx", ["tsx", setupPath], {
@@ -285,26 +292,43 @@ async function runSetup(): Promise<void> {
 }
 
 function printUsage(): void {
-  console.log(`
-${c.bold}${c.cyan}claudebridge${c.reset} — process manager for Claude Code services
+  const commands = [
+    [pc.green("start"), "  [telegram|discord|scheduler|all]", "Start services (default: all)"],
+    [pc.green("stop"), "   [telegram|discord|scheduler|all]", "Stop services (default: all)"],
+    [pc.green("restart"), "[telegram|discord|scheduler|all]", "Restart services"],
+    [pc.green("status"), "                               ", "Show running services"],
+    [pc.green("logs"), "   [service]                     ", "Tail log files"],
+    [pc.green("setup"), "                                ", "Run setup wizard"],
+  ];
 
-${c.bold}Usage:${c.reset}
-  claudebridge ${c.green}<command>${c.reset} [service]
+  const examples = [
+    ["claudebridge start", "start all services"],
+    ["claudebridge stop telegram", "stop only telegram bot"],
+    ["claudebridge restart scheduler", "restart scheduler"],
+    ["claudebridge status", "show status table"],
+  ];
 
-${c.bold}Commands:${c.reset}
-  ${c.green}start${c.reset}   [telegram|discord|scheduler|all]  Start services (default: all)
-  ${c.green}stop${c.reset}    [telegram|discord|scheduler|all]  Stop services (default: all)
-  ${c.green}restart${c.reset} [telegram|discord|scheduler|all]  Restart services
-  ${c.green}status${c.reset}                                    Show running services
-  ${c.green}logs${c.reset}    [service]                          Tail log files
-  ${c.green}setup${c.reset}                                     Run setup wizard
+  const cmdLines = commands
+    .map(([cmd, args, desc]) => `  ${cmd}${args}  ${pc.dim(desc)}`)
+    .join("\n");
 
-${c.bold}Examples:${c.reset}
-  claudebridge start              # start all services
-  claudebridge stop telegram      # stop only telegram bot
-  claudebridge restart scheduler  # restart scheduler
-  claudebridge status             # show status table
-`);
+  const exampleLines = examples
+    .map(([cmd, desc]) => `  ${pc.cyan(cmd.padEnd(34))} ${pc.dim("# " + desc)}`)
+    .join("\n");
+
+  const content =
+    `${pc.bold("Usage:")} claudebridge ${pc.green("<command>")} [service]\n\n` +
+    `${pc.bold("Commands:")}\n${cmdLines}\n\n` +
+    `${pc.bold("Examples:")}\n${exampleLines}`;
+
+  console.log(
+    boxen(content, {
+      padding: 1,
+      margin: { top: 0, right: 0, bottom: 1, left: 0 },
+      borderStyle: "round",
+      borderColor: "cyan",
+    }),
+  );
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -315,27 +339,31 @@ async function main(): Promise<void> {
   switch (command) {
     case "start": {
       const services = resolveServices(target);
-      console.log(`\n${c.bold}Starting services...${c.reset}`);
+      printBanner();
+      console.log(pc.bold("Starting services...\n"));
       for (const svc of services) await startService(svc);
       console.log();
       break;
     }
     case "stop": {
       const services = resolveServices(target);
-      console.log(`\n${c.bold}Stopping services...${c.reset}`);
+      printBanner();
+      console.log(pc.bold("Stopping services...\n"));
       for (const svc of services) await stopService(svc);
       console.log();
       break;
     }
     case "restart": {
       const services = resolveServices(target);
-      console.log(`\n${c.bold}Restarting services...${c.reset}`);
+      printBanner();
+      console.log(pc.bold("Restarting services...\n"));
       for (const svc of services) await stopService(svc);
       for (const svc of services) await startService(svc);
       console.log();
       break;
     }
     case "status":
+      printBanner();
       statusAll();
       break;
     case "logs":
@@ -345,12 +373,13 @@ async function main(): Promise<void> {
       await runSetup();
       break;
     default:
+      printBanner();
       printUsage();
       break;
   }
 }
 
 main().catch((err) => {
-  console.error(`${c.red}Fatal: ${err.message}${c.reset}`);
+  console.error(pc.red(`Fatal: ${err.message}`));
   process.exit(1);
 });

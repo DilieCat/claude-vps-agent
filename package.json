@@ -23,16 +23,24 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "telegraf": "^4.16.0",
-    "discord.js": "^14.16.0",
+    "boxen": "^8.0.1",
     "croner": "^8.1.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.0",
+    "figlet": "^1.10.0",
+    "gradient-string": "^3.0.0",
     "js-yaml": "^4.1.0",
-    "dotenv": "^16.4.0"
+    "nanospinner": "^1.2.2",
+    "picocolors": "^1.1.1",
+    "telegraf": "^4.16.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
-    "tsx": "^4.19.0",
+    "@types/boxen": "^2.1.0",
+    "@types/figlet": "^1.7.0",
+    "@types/gradient-string": "^1.1.6",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
-    "@types/js-yaml": "^4.0.9"
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
   }
 }
