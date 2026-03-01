@@ -27,7 +27,7 @@ import {
   type DMChannel,
 } from "discord.js";
 import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs, logCost, getCosts, getTotalCost } from "../lib/index.js";
-import type { Notification } from "../lib/index.js";
+import type { Notification, StreamEvent } from "../lib/index.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -45,6 +45,14 @@ const CLAUDE_ALLOWED_TOOLS = process.env["CLAUDE_ALLOWED_TOOLS"] ?? "";
 
 const DISCORD_MAX_LEN = 2000;
 const NOTIFICATION_POLL_INTERVAL = 60_000; // ms
+
+// Code Mode config
+const CODE_MODE_ENABLED = (process.env["CODE_MODE_ENABLED"] ?? "false").toLowerCase() === "true";
+const CODE_MODE_DEFAULT_PROJECT = process.env["CODE_MODE_DEFAULT_PROJECT"] ?? process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
+const CODE_MODE_MAX_BUDGET_USD = parseFloat(process.env["CODE_MODE_MAX_BUDGET_USD"] ?? "5.00");
+const CODE_MODE_TOOLS = (process.env["CODE_MODE_TOOLS"] ?? "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch")
+  .split(",").map((t) => t.trim()).filter(Boolean);
+const CODE_MODE_MCP_CONFIG = process.env["CODE_MODE_MCP_CONFIG"];
 
 const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
   process.env["ALLOWED_PROJECT_BASE"] ?? (process.env["HOME"] ?? "."),
@@ -66,6 +74,63 @@ const userSettings = new Map<string, UserSettings>();
 
 // Concurrency control — single-user environment, one request at a time
 let isProcessing = false;
+
+// ---------------------------------------------------------------------------
+// Code session tracking (Claude Code IDE through Discord threads)
+// ---------------------------------------------------------------------------
+interface CodeSession {
+  sessionId: string | null;   // Claude session ID (null = first message)
+  projectDir: string;         // working directory
+  userId: string;             // session owner
+  createdAt: number;
+  isProcessing: boolean;      // per-session concurrency lock
+}
+const codeSessions = new Map<string, CodeSession>();
+const CODE_SESSIONS_PATH = path.join(PROJECT_ROOT, "data", "discord_code_sessions.json");
+
+function loadCodeSessions(): void {
+  try {
+    if (!fs.existsSync(CODE_SESSIONS_PATH)) return;
+    const data = JSON.parse(fs.readFileSync(CODE_SESSIONS_PATH, "utf-8")) as Array<{
+      threadId: string;
+      sessionId: string | null;
+      projectDir: string;
+      userId: string;
+      createdAt: number;
+    }>;
+    for (const entry of data) {
+      codeSessions.set(entry.threadId, {
+        sessionId: entry.sessionId,
+        projectDir: entry.projectDir,
+        userId: entry.userId,
+        createdAt: entry.createdAt,
+        isProcessing: false,
+      });
+    }
+    console.log(`[discord] Loaded ${codeSessions.size} code sessions from disk.`);
+  } catch (err) {
+    console.warn(`[discord] Could not load code sessions: ${err}`);
+  }
+}
+
+function saveCodeSessions(): void {
+  try {
+    fs.mkdirSync(path.dirname(CODE_SESSIONS_PATH), { recursive: true });
+    const data = [...codeSessions.entries()].map(([threadId, s]) => ({
+      threadId,
+      sessionId: s.sessionId,
+      projectDir: s.projectDir,
+      userId: s.userId,
+      createdAt: s.createdAt,
+    }));
+    fs.writeFileSync(CODE_SESSIONS_PATH, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.warn(`[discord] Could not save code sessions: ${err}`);
+  }
+}
+
+// Load persisted sessions at startup
+loadCodeSessions();
 
 // ---------------------------------------------------------------------------
 // Bridge instance — try LivingBridge, fall back to ClaudeBridge
@@ -250,6 +315,16 @@ const commands = [
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("Show help for the Claude Discord bot"),
+  new SlashCommandBuilder()
+    .setName("claudecode")
+    .setDescription("Start a Claude Code session in a new thread")
+    .addStringOption((opt) =>
+      opt.setName("project")
+        .setDescription("Project directory (optional)")
+        .setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("endcode")
+    .setDescription("End the current Claude Code session"),
 ];
 
 // ---------------------------------------------------------------------------
