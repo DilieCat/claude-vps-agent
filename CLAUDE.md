@@ -15,7 +15,7 @@ claude-agent/
 ├── src/bots/telegram.ts        # Telegram bot module
 ├── src/bots/discord.ts         # Discord bot module
 ├── src/scheduler.ts            # YAML-based task scheduler
-├── setup.ts                    # Interactive setup wizard (zero-dependency)
+├── setup.ts                    # Interactive setup wizard (@clack/prompts)
 ├── infra/                      # Server provisioning, systemd, deploy scripts
 ├── config/                     # MCP server configs
 ├── data/brain.md               # Persistent brain memory (runtime state, gitignored)
