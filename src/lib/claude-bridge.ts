@@ -76,6 +76,36 @@ export interface ClaudeResponse {
   raw: Record<string, unknown>;
 }
 
+/** A single event from `claude -p --output-format stream-json`. */
+export interface StreamEvent {
+  type: "system" | "assistant" | "user" | "result";
+  subtype?: string;
+  session_id?: string;
+  // assistant message fields
+  message?: {
+    role?: string;
+    content?: Array<{
+      type: string;
+      tool_use_id?: string;
+      name?: string;
+      text?: string;
+      input?: Record<string, unknown>;
+      content?: string;
+      is_error?: boolean;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  };
+  // result fields
+  result?: string;
+  cost_usd?: number;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  num_turns?: number;
+  is_error?: boolean;
+  [key: string]: unknown;
+}
+
 function makeErrorResponse(text: string): ClaudeResponse {
   return {
     text,
@@ -99,6 +129,9 @@ export class ClaudeBridge {
   readonly allowedTools: string[];
   readonly maxBudgetUsd: number | undefined;
   readonly timeoutSeconds: number;
+  readonly dangerouslySkipPermissions: boolean;
+  readonly mcpConfig: string | undefined;
+  readonly cwdOverride: string | undefined;
 
   constructor(options: {
     projectDir?: string;
@@ -107,6 +140,9 @@ export class ClaudeBridge {
     allowedTools?: string[];
     maxBudgetUsd?: number;
     timeoutSeconds?: number;
+    dangerouslySkipPermissions?: boolean;
+    mcpConfig?: string;
+    cwdOverride?: string;
   } = {}) {
     this.projectDir = options.projectDir ?? process.cwd();
     this.workspaceDir = options.workspaceDir
@@ -134,6 +170,10 @@ export class ClaudeBridge {
       const envTimeout = process.env["CLAUDE_TIMEOUT_SECONDS"];
       this.timeoutSeconds = envTimeout ? parseInt(envTimeout, 10) : ClaudeBridge.DEFAULT_TIMEOUT;
     }
+
+    this.dangerouslySkipPermissions = options.dangerouslySkipPermissions ?? false;
+    this.mcpConfig = options.mcpConfig;
+    this.cwdOverride = options.cwdOverride;
   }
 
   /** Build the claude CLI command. */
@@ -151,6 +191,12 @@ export class ClaudeBridge {
     }
     if (this.maxBudgetUsd !== undefined) {
       cmd.push("--max-budget-usd", String(this.maxBudgetUsd));
+    }
+    if (this.dangerouslySkipPermissions) {
+      cmd.push("--dangerously-skip-permissions");
+    }
+    if (this.mcpConfig) {
+      cmd.push("--mcp-config", this.mcpConfig);
     }
 
     return cmd;
@@ -196,7 +242,7 @@ export class ClaudeBridge {
 
     try {
       const result = spawnSync(bin, args, {
-        cwd: this.workspaceDir,
+        cwd: this.cwdOverride ?? this.workspaceDir,
         encoding: "utf-8",
         timeout: this.timeoutSeconds * 1000,
         maxBuffer: 10 * 1024 * 1024,
@@ -239,7 +285,7 @@ export class ClaudeBridge {
       let proc;
       try {
         proc = spawn(bin, args, {
-          cwd: this.workspaceDir,
+          cwd: this.cwdOverride ?? this.workspaceDir,
           stdio: ["ignore", "pipe", "pipe"],
           env,
         });
@@ -293,6 +339,140 @@ export class ClaudeBridge {
         }
 
         resolve(response);
+      });
+    });
+  }
+
+  /**
+   * Send a prompt with streaming output.
+   * Each NDJSON line from stdout is parsed and passed to `onEvent`.
+   * Resolves with the final ClaudeResponse when the result event arrives.
+   */
+  async askStreaming(
+    prompt: string,
+    onEvent: (event: StreamEvent) => void | Promise<void>,
+    resumeSession?: string,
+  ): Promise<ClaudeResponse> {
+    // Build command with stream-json output format
+    const cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "stream-json", "--verbose"];
+
+    if (resumeSession) {
+      cmd.push("--resume", resumeSession);
+    }
+    if (this.model) {
+      cmd.push("--model", this.model);
+    }
+    if (this.allowedTools.length > 0) {
+      cmd.push("--allowedTools", this.allowedTools.join(","));
+    }
+    if (this.maxBudgetUsd !== undefined) {
+      cmd.push("--max-budget-usd", String(this.maxBudgetUsd));
+    }
+    if (this.dangerouslySkipPermissions) {
+      cmd.push("--dangerously-skip-permissions");
+    }
+    if (this.mcpConfig) {
+      cmd.push("--mcp-config", this.mcpConfig);
+    }
+
+    const [bin, ...args] = cmd;
+    const env = { ...process.env };
+    delete env["CLAUDECODE"];
+
+    return new Promise<ClaudeResponse>((resolve, reject) => {
+      let proc;
+      try {
+        proc = spawn(bin, args, {
+          cwd: this.cwdOverride ?? this.workspaceDir,
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+        });
+      } catch {
+        resolve(makeErrorResponse(
+          "claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
+        ));
+        return;
+      }
+
+      let lastResult: ClaudeResponse | null = null;
+      let stderrBuf = "";
+      let lineBuffer = "";
+
+      proc.stdout.on("data", (chunk: Buffer) => {
+        lineBuffer += chunk.toString("utf-8");
+        const lines = lineBuffer.split("\n");
+        // Keep the last incomplete line in the buffer
+        lineBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as StreamEvent;
+            // Fire callback (swallow errors to avoid breaking the stream)
+            try { void onEvent(event); } catch { /* ignore callback errors */ }
+
+            if (event.type === "result") {
+              lastResult = {
+                text: (event.result as string) ?? "",
+                exitCode: 0,
+                costUsd: (event.cost_usd as number) ?? 0,
+                durationMs: (event.duration_ms as number) ?? 0,
+                durationApiMs: (event.duration_api_ms as number) ?? 0,
+                numTurns: (event.num_turns as number) ?? 0,
+                sessionId: (event.session_id as string) ?? "",
+                isError: (event.is_error as boolean) ?? false,
+                raw: event as unknown as Record<string, unknown>,
+              };
+            }
+          } catch {
+            // Not valid JSON — ignore
+          }
+        }
+      });
+
+      proc.stderr.on("data", (chunk: Buffer) => {
+        stderrBuf += chunk.toString("utf-8");
+      });
+
+      const timer = setTimeout(() => {
+        proc.kill("SIGKILL");
+      }, this.timeoutSeconds * 1000);
+
+      proc.on("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        if (err.code === "ENOENT") {
+          resolve(makeErrorResponse(
+            "claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
+          ));
+        } else {
+          resolve(makeErrorResponse(err.message));
+        }
+      });
+
+      proc.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (signal === "SIGKILL") {
+          resolve(makeErrorResponse(`Timeout after ${this.timeoutSeconds}s`));
+          return;
+        }
+
+        if (lastResult) {
+          resolve(lastResult);
+        } else {
+          const exitCode = code ?? 1;
+          resolve({
+            text: stderrBuf.trim() || "No result received from Claude",
+            exitCode,
+            costUsd: 0,
+            durationMs: 0,
+            durationApiMs: 0,
+            numTurns: 0,
+            sessionId: "",
+            isError: true,
+            raw: {},
+          });
+        }
       });
     });
   }
