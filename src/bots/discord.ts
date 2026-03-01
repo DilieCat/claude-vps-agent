@@ -23,7 +23,7 @@ import {
   type ThreadChannel,
   type DMChannel,
 } from "discord.js";
-import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs } from "../lib/index.js";
+import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs, logCost, getCosts, getTotalCost } from "../lib/index.js";
 import type { Notification } from "../lib/index.js";
 
 // ---------------------------------------------------------------------------
@@ -210,6 +210,19 @@ const commands = [
           { name: "mentions — only respond when @mentioned", value: "mentions" },
         )),
   new SlashCommandBuilder()
+    .setName("costs")
+    .setDescription("Show usage costs")
+    .addStringOption((opt) =>
+      opt.setName("period")
+        .setDescription("Time period")
+        .setRequired(false)
+        .addChoices(
+          { name: "today", value: "today" },
+          { name: "week", value: "week" },
+          { name: "month", value: "month" },
+          { name: "all time", value: "all" },
+        )),
+  new SlashCommandBuilder()
     .setName("help")
     .setDescription("Show help for the Claude Discord bot"),
 ];
@@ -283,6 +296,9 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
       const footer = `-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`;
       await target.send(footer);
     }
+
+    // Log cost
+    logCost(response.costUsd, response.numTurns, response.durationMs, prompt);
   } finally {
     isProcessing = false;
   }
@@ -464,6 +480,30 @@ client.on("interactionCreate", async (interaction) => {
     } else {
       await interaction.reply({ content: "I'll only respond when you **@mention** me. Use `/respond all` to change.", ephemeral: true });
     }
+  } else if (commandName === "costs") {
+    const period = (interaction.options.getString("period") ?? "all") as "today" | "week" | "month" | "all";
+    const entries = getCosts(period);
+    const total = getTotalCost(period);
+    const avgDuration = entries.length > 0
+      ? Math.round(entries.reduce((s, e) => s + e.durationMs, 0) / entries.length)
+      : 0;
+
+    const periodLabel = period === "all" ? "all time" : period;
+    let text = `**Cost Summary (${periodLabel})**\n\n`;
+    text += `Requests: ${entries.length}\n`;
+    text += `Total cost: $${total.toFixed(4)}\n`;
+    text += `Avg response time: ${(avgDuration / 1000).toFixed(1)}s\n`;
+
+    if (entries.length > 0) {
+      text += `\n**Recent requests:**\n`;
+      const recent = entries.slice(-5).reverse();
+      for (const e of recent) {
+        const date = new Date(e.timestamp).toLocaleString();
+        text += `- ${date}: $${e.costUsd.toFixed(4)} — ${e.promptPreview.slice(0, 50)}${e.promptPreview.length > 50 ? "..." : ""}\n`;
+      }
+    }
+
+    await interaction.reply({ content: text, ephemeral: true });
   } else if (commandName === "help") {
     const modeLabel = livingMode ? "living agent" : "stateless";
     let helpText =
@@ -475,6 +515,7 @@ client.on("interactionCreate", async (interaction) => {
       "`/notify` — Toggle proactive notifications on/off\n" +
       "`/project [path]` — View or change the active project directory\n" +
       "`/model [name]` — View or change the Claude model\n" +
+      "`/costs [period]` — Show usage costs (today/week/month/all)\n" +
       "`/respond <mode>` — Set response mode: `all` (respond to all messages) or `mentions` (only when @mentioned)\n" +
       "`/help` — Show this help message\n\n" +
       "**Notes:**\n" +
@@ -577,6 +618,9 @@ client.on("messageCreate", async (message) => {
     if (response.costUsd > 0) {
       await message.channel.send(`-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`);
     }
+
+    // Log cost
+    logCost(response.costUsd, response.numTurns, response.durationMs, prompt);
   } finally {
     isProcessing = false;
   }

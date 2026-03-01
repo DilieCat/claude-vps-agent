@@ -17,6 +17,9 @@ import {
   splitMessage,
   loadNotifyPrefs,
   saveNotifyPrefs,
+  logCost,
+  getCosts,
+  getTotalCost,
 } from "../lib/index.js";
 import type { ClaudeResponse, Notification } from "../lib/index.js";
 
@@ -189,6 +192,9 @@ async function handlePrompt(ctx: Context, prompt: string): Promise<void> {
     const footer = `\n\n[cost=$${response.costUsd.toFixed(4)} | turns=${response.numTurns}]`;
 
     await sendLong(ctx, text + footer);
+
+    // Log cost
+    logCost(response.costUsd, response.numTurns, response.durationMs, prompt);
   } finally {
     isProcessing = false;
   }
@@ -235,6 +241,7 @@ function main(): void {
       );
     }
     lines.push(
+      "/costs [period]  - Show usage costs (today/week/month/all)",
       "/help  - Show this help message",
       "",
       "You can also send a plain text message and it will be forwarded to Claude as a prompt."
@@ -355,6 +362,37 @@ function main(): void {
     } else {
       await ctx.reply("Proactive notifications disabled.");
     }
+  });
+
+  // /costs [period]
+  bot.command("costs", async (ctx) => {
+    if (!isAllowed(ctx.from.id)) return;
+
+    const arg = ctx.message.text.replace(/^\/costs\s*/, "").trim().toLowerCase();
+    const period = (["today", "week", "month", "all"].includes(arg) ? arg : "all") as "today" | "week" | "month" | "all";
+
+    const entries = getCosts(period);
+    const total = getTotalCost(period);
+    const avgDuration = entries.length > 0
+      ? Math.round(entries.reduce((s, e) => s + e.durationMs, 0) / entries.length)
+      : 0;
+
+    const periodLabel = period === "all" ? "all time" : period;
+    let text = `Cost Summary (${periodLabel})\n\n`;
+    text += `Requests: ${entries.length}\n`;
+    text += `Total cost: $${total.toFixed(4)}\n`;
+    text += `Avg response time: ${(avgDuration / 1000).toFixed(1)}s\n`;
+
+    if (entries.length > 0) {
+      text += `\nRecent requests:\n`;
+      const recent = entries.slice(-5).reverse();
+      for (const e of recent) {
+        const date = new Date(e.timestamp).toLocaleString();
+        text += `- ${date}: $${e.costUsd.toFixed(4)} — ${e.promptPreview.slice(0, 50)}${e.promptPreview.length > 50 ? "..." : ""}\n`;
+      }
+    }
+
+    await ctx.reply(text);
   });
 
   // Plain text messages
