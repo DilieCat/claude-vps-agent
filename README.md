@@ -1,5 +1,7 @@
 # claude-agent
 
+[![CI](https://github.com/DilieCat/claudebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/DilieCat/claudebridge/actions/workflows/ci.yml)
+
 Run Claude Code as a persistent agent on any machine -- VPS, homelab, laptop, or server. Includes Telegram/Discord bot integrations, task scheduling, and MCP server support. 100% official, no ban risk.
 
 ## Why?
@@ -62,6 +64,26 @@ npm run discord             # Run Discord bot directly
 npm run scheduler           # Run scheduler directly
 ```
 
+## Testing
+
+Unit tests are written with [vitest](https://vitest.dev/) and cover the core library modules.
+
+```bash
+npm test          # Run all tests once
+npm run test:watch  # Run tests in watch mode
+```
+
+Tests live in the `tests/` directory:
+
+| File | What it covers |
+|------|---------------|
+| `tests/brain.test.ts` | Brain read/write, sections, user preferences |
+| `tests/session-store.test.ts` | Session get/set/clear/cleanup |
+| `tests/message-utils.test.ts` | `splitMessage` edge cases (empty, exact limit, unicode) |
+| `tests/cost-tracker.test.ts` | `logCost`, `getCosts`, `getTotalCost` by period |
+
+CI runs on every push and pull request to `main` (type check + tests).
+
 ## Tech Stack
 
 - **TypeScript** -- all source code in `src/`
@@ -72,6 +94,7 @@ npm run scheduler           # Run scheduler directly
 - **tsx** -- TypeScript execution without a compile step
 - **@clack/prompts** -- interactive CLI prompts for the setup wizard
 - **boxen**, **figlet**, **gradient-string**, **picocolors**, **nanospinner** -- setup wizard UI
+- **vitest** -- unit test framework (tests in `tests/`)
 
 ## Architecture
 
@@ -179,6 +202,12 @@ Living agent mode activates automatically when the brain system is available. Th
 
 **Concurrency control:**
 Both bots enforce a single-request-at-a-time policy. If a request is already being processed when a new message arrives, the bot replies with a "still busy" message and discards the new request. This prevents Claude from being called in parallel and keeps costs predictable.
+
+**File attachments:**
+Both bots support sending files to Claude. Supported types: images (jpg, jpeg, png, gif, webp), PDFs, and text files (txt, md, ts, js, py). Files are downloaded to a temp directory, passed to Claude, and cleaned up automatically. Unsupported file types receive an error message.
+
+- **Telegram**: send a photo or document — the bot handles it automatically.
+- **Discord**: attach a file to any message the bot will process.
 
 **Security:**
 - `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to

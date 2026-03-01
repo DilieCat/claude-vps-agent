@@ -17,6 +17,8 @@ claude-agent/
 ├── src/bots/discord.ts         # Discord bot module
 ├── src/scheduler.ts            # YAML-based task scheduler
 ├── setup.ts                    # Interactive setup wizard (@clack/prompts)
+├── tests/                      # Vitest unit tests (brain, session-store, message-utils, cost-tracker)
+├── .github/workflows/ci.yml    # CI: type check + tests on push/PR to main
 ├── infra/                      # Server provisioning, systemd, deploy scripts
 ├── config/                     # MCP server configs
 ├── data/brain.md               # Persistent brain memory (runtime state, gitignored)

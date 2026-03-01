@@ -10,7 +10,10 @@
 import "dotenv/config";
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import https from "node:https";
+import http from "node:http";
 import {
   Client,
   GatewayIntentBits,
@@ -48,6 +51,11 @@ const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
 );
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), "..", "..");
+
+const SUPPORTED_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".webp",  // images
+  ".pdf", ".txt", ".md", ".ts", ".js", ".py", // documents
+]);
 
 // Per-user settings
 interface UserSettings {
@@ -159,6 +167,23 @@ function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
   }
 
   return overridden;
+}
+
+function downloadFile(url: string, dest: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https") ? https : http;
+    const file = fs.createWriteStream(dest);
+    client.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        file.close();
+        reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        return;
+      }
+      res.pipe(file);
+      file.on("finish", () => { file.close(); resolve(); });
+      file.on("error", (err) => { file.close(); reject(err); });
+    }).on("error", reject);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +593,37 @@ client.on("messageCreate", async (message) => {
     prompt = prompt.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim();
   }
 
+  // Handle file attachments
+  const tmpFiles: string[] = [];
+  if (message.attachments.size > 0) {
+    for (const attachment of message.attachments.values()) {
+      const ext = path.extname(attachment.name ?? "").toLowerCase();
+      if (!SUPPORTED_EXTENSIONS.has(ext)) {
+        await message.reply(
+          `Unsupported file type: ${ext}\nSupported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
+        );
+        continue;
+      }
+
+      const tmpPath = path.join(os.tmpdir(), `dc-att-${Date.now()}-${attachment.name ?? "file"}`);
+      try {
+        await downloadFile(attachment.url, tmpPath);
+        tmpFiles.push(tmpPath);
+
+        const textExts = new Set([".txt", ".md", ".ts", ".js", ".py"]);
+        if (textExts.has(ext)) {
+          const content = fs.readFileSync(tmpPath, "utf-8");
+          prompt = `[Attached file: ${attachment.name}]\n\`\`\`\n${content}\n\`\`\`\n\n${prompt}`;
+        } else {
+          prompt = `[Attached file: ${attachment.name}]\nFile saved at: ${tmpPath}\n\n${prompt}`;
+        }
+      } catch (err) {
+        console.error(`[discord] Failed to download attachment ${attachment.name}:`, err);
+        await message.reply(`Failed to download attachment: ${attachment.name}`);
+      }
+    }
+  }
+
   if (!prompt) {
     await message.reply("Send me a message and I'll ask Claude for you.");
     return;
@@ -623,6 +679,10 @@ client.on("messageCreate", async (message) => {
     logCost(response.costUsd, response.numTurns, response.durationMs, prompt);
   } finally {
     isProcessing = false;
+    // Cleanup temp files from attachments
+    for (const tmp of tmpFiles) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* ignore */ }
+    }
   }
 });
 

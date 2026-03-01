@@ -7,7 +7,10 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import https from "node:https";
+import http from "node:http";
 import { Telegraf, Context } from "telegraf";
 import dotenv from "dotenv";
 import {
@@ -50,6 +53,11 @@ if (rawUsers.trim()) {
 const TELEGRAM_MAX_LEN = 4096;
 const NOTIFY_PREFS_PATH = path.join(PROJECT_ROOT, "data", "telegram_notify_prefs.json");
 const NOTIFICATION_CHECK_INTERVAL = 60_000; // ms
+
+const SUPPORTED_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".webp",  // images
+  ".pdf", ".txt", ".md", ".ts", ".js", ".py", // documents
+]);
 
 const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
   process.env["ALLOWED_PROJECT_BASE"] ?? process.env["HOME"] ?? "/"
@@ -148,6 +156,23 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
   for (const chunk of splitMessage(text, TELEGRAM_MAX_LEN)) {
     await ctx.reply(chunk);
   }
+}
+
+function downloadFile(url: string, dest: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https") ? https : http;
+    const file = fs.createWriteStream(dest);
+    client.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        file.close();
+        reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        return;
+      }
+      res.pipe(file);
+      file.on("finish", () => { file.close(); resolve(); });
+      file.on("error", (err) => { file.close(); reject(err); });
+    }).on("error", reject);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +418,74 @@ function main(): void {
     }
 
     await ctx.reply(text);
+  });
+
+  // Photo messages
+  bot.on("photo", async (ctx) => {
+    if (!isAllowed(ctx.from.id)) return;
+
+    const photo = ctx.message.photo[ctx.message.photo.length - 1]; // highest resolution
+    const caption = ctx.message.caption ?? "Describe this image.";
+
+    let tmpPath: string | null = null;
+    try {
+      const fileLink = await ctx.telegram.getFileLink(photo.file_id);
+      const ext = path.extname(new URL(fileLink.href).pathname) || ".jpg";
+      tmpPath = path.join(os.tmpdir(), `tg-photo-${Date.now()}${ext}`);
+      await downloadFile(fileLink.href, tmpPath);
+      const fileContext = `[Attached image: ${path.basename(tmpPath)}]\nFile saved at: ${tmpPath}\n\n`;
+      await handlePrompt(ctx, fileContext + caption);
+    } catch (err) {
+      console.error("[telegram] Failed to download photo:", err);
+      await ctx.reply("Failed to download the photo. Please try again.");
+    } finally {
+      if (tmpPath && fs.existsSync(tmpPath)) {
+        fs.unlinkSync(tmpPath);
+      }
+    }
+  });
+
+  // Document messages
+  bot.on("document", async (ctx) => {
+    if (!isAllowed(ctx.from.id)) return;
+
+    const doc = ctx.message.document;
+    const fileName = doc.file_name ?? "unknown";
+    const ext = path.extname(fileName).toLowerCase();
+
+    if (!SUPPORTED_EXTENSIONS.has(ext)) {
+      await ctx.reply(
+        `Unsupported file type: ${ext}\nSupported: ${[...SUPPORTED_EXTENSIONS].join(", ")}`,
+      );
+      return;
+    }
+
+    const caption = ctx.message.caption ?? `Analyze this file: ${fileName}`;
+
+    let tmpPath: string | null = null;
+    try {
+      const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+      tmpPath = path.join(os.tmpdir(), `tg-doc-${Date.now()}-${fileName}`);
+      await downloadFile(fileLink.href, tmpPath);
+
+      let fileContext: string;
+      const textExts = new Set([".txt", ".md", ".ts", ".js", ".py"]);
+      if (textExts.has(ext)) {
+        const content = fs.readFileSync(tmpPath, "utf-8");
+        fileContext = `[Attached file: ${fileName}]\n\`\`\`\n${content}\n\`\`\`\n\n`;
+      } else {
+        fileContext = `[Attached file: ${fileName}]\nFile saved at: ${tmpPath}\n\n`;
+      }
+
+      await handlePrompt(ctx, fileContext + caption);
+    } catch (err) {
+      console.error("[telegram] Failed to download document:", err);
+      await ctx.reply("Failed to download the file. Please try again.");
+    } finally {
+      if (tmpPath && fs.existsSync(tmpPath)) {
+        fs.unlinkSync(tmpPath);
+      }
+    }
   });
 
   // Plain text messages
