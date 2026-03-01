@@ -4,40 +4,39 @@
  *
  * Run with:  npx tsx setup.ts
  *
- * This is the ONLY command you need after cloning the repository.
- * Zero external dependencies -- uses only Node.js built-in modules.
+ * Uses @clack/prompts for a polished interactive CLI experience.
  */
 
-import * as readline from "readline";
-import { execSync, execFileSync, spawnSync } from "child_process";
+import * as p from "@clack/prompts";
+import { execSync, spawnSync } from "child_process";
 import * as fs from "fs";
-import * as path from "path";
+import * as nodePath from "path";
 import * as os from "os";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = path.dirname(new URL(import.meta.url).pathname);
-const ENV_FILE = path.join(PROJECT_ROOT, ".env");
+const PROJECT_ROOT = nodePath.dirname(new URL(import.meta.url).pathname);
+const ENV_FILE = nodePath.join(PROJECT_ROOT, ".env");
 
-const MODULES: Array<[string, string]> = [
-  ["telegram", "Telegram Bot"],
-  ["discord", "Discord Bot"],
-  ["scheduler", "Task Scheduler"],
+const MODULES: Array<{ value: string; label: string }> = [
+  { value: "telegram", label: "Telegram Bot" },
+  { value: "discord", label: "Discord Bot" },
+  { value: "scheduler", label: "Task Scheduler" },
 ];
 
 const SYSTEMD_SERVICE_MAP: Record<string, [string, string]> = {
   telegram: [
-    path.join(PROJECT_ROOT, "infra", "systemd", "telegram-bot.service"),
+    nodePath.join(PROJECT_ROOT, "infra", "systemd", "telegram-bot.service"),
     "telegram-bot",
   ],
   discord: [
-    path.join(PROJECT_ROOT, "infra", "systemd", "discord-bot.service"),
+    nodePath.join(PROJECT_ROOT, "infra", "systemd", "discord-bot.service"),
     "discord-bot",
   ],
   scheduler: [
-    path.join(PROJECT_ROOT, "infra", "systemd", "scheduler.service"),
+    nodePath.join(PROJECT_ROOT, "infra", "systemd", "scheduler.service"),
     "scheduler",
   ],
 };
@@ -51,96 +50,15 @@ const BANNER = `
 `;
 
 // ---------------------------------------------------------------------------
-// Plain-text UI helpers (no dependencies)
+// Cancel handler
 // ---------------------------------------------------------------------------
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-function question(prompt: string): Promise<string> {
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => resolve(answer));
-  });
-}
-
-function clearScreen(): void {
-  if (process.stdout.isTTY) {
-    process.stdout.write("\x1b[2J\x1b[H");
+function cancelGuard<T>(value: T | symbol): T {
+  if (p.isCancel(value)) {
+    p.cancel("Setup cancelled.");
+    process.exit(1);
   }
-}
-
-function printBanner(): void {
-  console.log(BANNER);
-  console.log("  All-in-One Setup Wizard");
-  console.log("  " + "=".repeat(40));
-  console.log();
-}
-
-function heading(title: string): void {
-  const width = 60;
-  console.log();
-  console.log("-".repeat(width));
-  console.log(`  ${title}`);
-  console.log("-".repeat(width));
-  console.log();
-}
-
-function ok(msg: string): void {
-  console.log(`  [ok] ${msg}`);
-}
-
-function warn(msg: string): void {
-  console.log(`  [!!] ${msg}`);
-}
-
-function fail(msg: string): void {
-  console.log(`  [FAIL] ${msg}`);
-}
-
-function info(msg: string): void {
-  console.log(`  ${msg}`);
-}
-
-async function askYesNo(prompt: string, defaultYes = true): Promise<boolean> {
-  const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
-  while (true) {
-    const answer = (await question(prompt + suffix)).trim().toLowerCase();
-    if (answer === "") return defaultYes;
-    if (answer === "y" || answer === "yes") return true;
-    if (answer === "n" || answer === "no") return false;
-    console.log("  Please answer y or n.");
-  }
-}
-
-async function askInput(
-  prompt: string,
-  defaultValue?: string,
-  optional?: boolean,
-): Promise<string> {
-  if (defaultValue) {
-    const raw = (await question(`  ${prompt} [${defaultValue}]: `)).trim();
-    return raw || defaultValue;
-  }
-  if (optional) {
-    const raw = (await question(`  ${prompt}: `)).trim();
-    return raw;
-  }
-  while (true) {
-    const raw = (await question(`  ${prompt}: `)).trim();
-    if (raw) return raw;
-    console.log("  A value is required.");
-  }
-}
-
-async function askCommaList(prompt: string, example: string): Promise<string> {
-  const raw = (await question(`  ${prompt} (e.g. ${example}): `)).trim();
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join(",");
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,27 +151,23 @@ function loadExistingEnv(): Record<string, string> {
 // ---------------------------------------------------------------------------
 
 async function stepWelcome(): Promise<void> {
-  clearScreen();
-  printBanner();
-  info("This wizard sets up everything you need to run claude-code.");
-  info("It checks prerequisites, collects configuration, installs");
-  info("dependencies, and gets you ready to go.");
-  console.log();
+  console.log(BANNER);
+  p.intro("All-in-One Setup Wizard");
 
   if (fs.existsSync(ENV_FILE)) {
-    warn("An existing .env file was detected.");
-    console.log();
-    const choice = await askYesNo("  Update existing configuration?", true);
-    if (!choice) {
-      console.log();
-      info("No changes made. Re-run the wizard when you are ready.");
+    p.log.warn("An existing .env file was detected.");
+
+    const update = cancelGuard(await p.confirm({
+      message: "Update existing configuration?",
+      initialValue: true,
+    }));
+
+    if (!update) {
+      p.outro("No changes made. Re-run the wizard when you are ready.");
       process.exit(0);
     }
-    console.log();
-    info(
-      "Existing values will be shown as defaults. Press Enter to keep them.",
-    );
-    console.log();
+
+    p.log.info("Existing values will be shown as defaults. Press Enter to keep them.");
   }
 }
 
@@ -262,82 +176,88 @@ async function stepWelcome(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function stepPrerequisites(): Promise<boolean> {
-  heading("Step 1: Checking Prerequisites");
+  p.log.step("Step 1: Checking Prerequisites");
   let allOk = true;
 
+  const s = p.spinner();
+
   // -- Node.js version --
+  s.start("Checking Node.js...");
   const nodeVer = getVersion("node");
   if (nodeVer) {
     const parsed = parseVersionTuple(nodeVer);
     if (parsed && parsed[0] >= 18) {
-      ok(`Node.js ${nodeVer}`);
+      s.stop(`Node.js ${nodeVer}`);
     } else {
-      fail(`Node.js ${nodeVer} -- version 18 or higher is required`);
-      info("Download from: https://nodejs.org/");
+      s.stop(`Node.js ${nodeVer} -- version 18 or higher is required`);
+      p.log.error("Download from: https://nodejs.org/");
       allOk = false;
     }
   } else {
-    fail("Node.js not found -- version 18 or higher is required");
-    info("Download from: https://nodejs.org/");
+    s.stop("Node.js not found -- version 18 or higher is required");
+    p.log.error("Download from: https://nodejs.org/");
     allOk = false;
   }
 
   // -- npm --
+  s.start("Checking npm...");
   const npmVer = getVersion("npm");
   if (npmVer) {
-    ok(`npm ${npmVer}`);
+    s.stop(`npm ${npmVer}`);
   } else {
-    fail("npm not found (usually installed with Node.js)");
+    s.stop("npm not found (usually installed with Node.js)");
     allOk = false;
   }
 
   // -- Claude CLI --
+  s.start("Checking Claude CLI...");
   const claudeVer = getVersion("claude");
   if (claudeVer) {
-    ok(`Claude CLI (${claudeVer})`);
+    s.stop(`Claude CLI (${claudeVer})`);
   } else {
-    warn("Claude CLI not found");
-    console.log();
+    s.stop("Claude CLI not found");
+
     if (cmdExists("npm")) {
-      if (
-        await askYesNo(
-          "  Install Claude CLI now? (npm install -g @anthropic-ai/claude-code)",
-        )
-      ) {
-        info("Installing Claude CLI...");
+      const installCli = cancelGuard(await p.confirm({
+        message: "Install Claude CLI now? (npm install -g @anthropic-ai/claude-code)",
+        initialValue: true,
+      }));
+
+      if (installCli) {
+        s.start("Installing Claude CLI...");
         const result = runCmd(
           ["npm", "install", "-g", "@anthropic-ai/claude-code"],
           120000,
         );
         if (result.code === 0) {
-          ok("Claude CLI installed successfully");
+          s.stop("Claude CLI installed successfully");
         } else {
-          fail("Claude CLI installation failed");
+          s.stop("Claude CLI installation failed");
           if (result.stderr) {
-            info(`Error: ${result.stderr.slice(0, 200)}`);
+            p.log.error(result.stderr.slice(0, 200));
           }
-          info(
-            "Try installing manually: npm install -g @anthropic-ai/claude-code",
-          );
+          p.log.info("Try installing manually: npm install -g @anthropic-ai/claude-code");
           allOk = false;
         }
       } else {
-        warn("Claude CLI is required. Install later with:");
-        info("  npm install -g @anthropic-ai/claude-code");
+        p.log.warn("Claude CLI is required. Install later with:");
+        p.log.info("  npm install -g @anthropic-ai/claude-code");
         allOk = false;
       }
     } else {
-      info(
-        "Install Node.js first, then run: npm install -g @anthropic-ai/claude-code",
-      );
+      p.log.info("Install Node.js first, then run: npm install -g @anthropic-ai/claude-code");
       allOk = false;
     }
   }
 
   if (!allOk) {
-    console.log();
-    warn("Some prerequisites are missing.");
-    if (!(await askYesNo("  Continue anyway?", true))) {
+    p.log.warn("Some prerequisites are missing.");
+    const cont = cancelGuard(await p.confirm({
+      message: "Continue anyway?",
+      initialValue: true,
+    }));
+    if (!cont) {
+      p.cancel("Setup cancelled due to missing prerequisites.");
       process.exit(1);
     }
   }
@@ -350,98 +270,91 @@ async function stepPrerequisites(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 async function stepClaudeAuth(): Promise<void> {
-  heading("Step 2: Claude Authentication");
+  p.log.step("Step 2: Claude Authentication");
 
   if (!cmdExists("claude")) {
-    warn("Claude CLI not found -- skipping authentication check.");
-    info("Install it later and run: claude login");
+    p.log.warn("Claude CLI not found -- skipping authentication check.");
+    p.log.info("Install it later and run: claude login");
     return;
   }
 
-  // Quick check: try running a simple prompt
-  info("Checking if Claude CLI is authenticated...");
+  const s = p.spinner();
+  s.start("Checking if Claude CLI is authenticated...");
   const result = runCmd(
     ["claude", "-p", "say ok", "--output-format", "json"],
     30000,
   );
 
   if (result.code === 0) {
-    ok("Claude CLI is authenticated and working");
+    s.stop("Claude CLI is authenticated and working");
     return;
   }
 
-  // Not authenticated
-  warn("Claude CLI is not authenticated.");
-  console.log();
+  s.stop("Claude CLI is not authenticated");
 
   if (isHeadless()) {
-    info("This appears to be a headless server (no display detected).");
-    console.log();
-    info("To authenticate, you need to set up SSH port forwarding from");
-    info("your local machine so the OAuth flow can complete in your browser.");
-    console.log();
-    info("From your local machine, run:");
-    info("  ssh -L 9315:localhost:9315 user@this-server");
-    console.log();
-    info("Then, in another terminal on this server, run:");
-    info("  claude login");
-    console.log();
-    info(
-      "The OAuth URL will open in your local browser via the SSH tunnel.",
+    p.note(
+      [
+        "This appears to be a headless server (no display detected).",
+        "",
+        "To authenticate, set up SSH port forwarding from your local machine:",
+        "  ssh -L 9315:localhost:9315 user@this-server",
+        "",
+        "Then, in another terminal on this server, run:",
+        "  claude login",
+        "",
+        "The OAuth URL will open in your local browser via the SSH tunnel.",
+      ].join("\n"),
+      "Headless Authentication",
     );
-    console.log();
-    if (
-      await askYesNo(
-        "  Have you completed authentication in another terminal?",
-        false,
-      )
-    ) {
-      // Verify
+
+    const done = cancelGuard(await p.confirm({
+      message: "Have you completed authentication in another terminal?",
+      initialValue: false,
+    }));
+
+    if (done) {
+      s.start("Verifying authentication...");
       const verify = runCmd(
         ["claude", "-p", "say ok", "--output-format", "json"],
         30000,
       );
       if (verify.code === 0) {
-        ok("Claude CLI authentication verified");
+        s.stop("Claude CLI authentication verified");
       } else {
-        warn(
-          "Authentication could not be verified. You can try again later.",
-        );
+        s.stop("Authentication could not be verified. You can try again later.");
       }
     } else {
-      info("You can authenticate later. The setup will continue.");
+      p.log.info("You can authenticate later. The setup will continue.");
     }
   } else {
-    info("Running 'claude login' to authenticate...");
-    console.log();
+    p.log.info("Running 'claude login' to authenticate...");
     try {
       const loginResult = spawnSync("claude", ["login"], {
         stdio: "inherit",
         timeout: 120000,
       });
       if (loginResult.error) {
-        warn(`Login failed: ${loginResult.error.message}`);
-        info("You can run 'claude login' manually later.");
+        p.log.warn(`Login failed: ${loginResult.error.message}`);
+        p.log.info("You can run 'claude login' manually later.");
         return;
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      warn(`Login failed: ${msg}`);
-      info("You can run 'claude login' manually later.");
+      p.log.warn(`Login failed: ${msg}`);
+      p.log.info("You can run 'claude login' manually later.");
       return;
     }
 
-    // Verify
+    s.start("Verifying authentication...");
     const verify = runCmd(
       ["claude", "-p", "say ok", "--output-format", "json"],
       30000,
     );
     if (verify.code === 0) {
-      ok("Claude CLI authentication verified");
+      s.stop("Claude CLI authentication verified");
     } else {
-      warn(
-        "Authentication could not be verified. You can run 'claude login' later.",
-      );
+      s.stop("Authentication could not be verified. You can run 'claude login' later.");
     }
   }
 }
@@ -451,27 +364,21 @@ async function stepClaudeAuth(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function stepModules(): Promise<string[]> {
-  heading("Step 3: Module Selection");
-  info("Choose which modules to enable:");
-  console.log();
+  p.log.step("Step 3: Module Selection");
 
-  const selected: string[] = [];
-  for (const [key, label] of MODULES) {
-    if (await askYesNo(`  Enable ${label}?`, true)) {
-      selected.push(key);
-    }
-  }
+  const selected = cancelGuard(await p.multiselect({
+    message: "Choose which modules to enable:",
+    options: MODULES.map((m) => ({
+      value: m.value,
+      label: m.label,
+    })),
+    initialValues: MODULES.map((m) => m.value),
+    required: true,
+  }));
 
-  if (selected.length === 0) {
-    console.log();
-    warn("You must enable at least one module.");
-    return stepModules();
-  }
-
-  console.log();
-  const moduleMap = new Map(MODULES);
   for (const key of selected) {
-    ok(`${moduleMap.get(key)} enabled`);
+    const mod = MODULES.find((m) => m.value === key);
+    if (mod) p.log.success(`${mod.label} enabled`);
   }
 
   return selected;
@@ -488,46 +395,69 @@ async function stepModuleConfig(
   const envVars: Record<string, string> = {};
 
   if (selected.includes("telegram")) {
-    heading("Step 4a: Telegram Bot Configuration");
-    info("You need a bot token from @BotFather on Telegram.");
-    info("  https://t.me/BotFather");
-    console.log();
-    const token = await askInput(
-      "Bot token",
-      existingEnv.TELEGRAM_BOT_TOKEN,
-    );
-    const users = await askCommaList(
-      "Allowed Telegram user IDs",
-      existingEnv.TELEGRAM_ALLOWED_USERS || "123456789,987654321",
-    );
+    p.log.step("Step 4a: Telegram Bot Configuration");
+    p.log.info("You need a bot token from @BotFather on Telegram.");
+    p.log.info("  https://t.me/BotFather");
+
+    const token = cancelGuard(await p.text({
+      message: "Bot token:",
+      placeholder: "123456:ABC-DEF...",
+      initialValue: existingEnv.TELEGRAM_BOT_TOKEN,
+      validate: (v) => {
+        if (!v || v.trim().length === 0) return "A bot token is required.";
+      },
+    }));
+
+    const users = cancelGuard(await p.text({
+      message: "Allowed Telegram user IDs (comma-separated):",
+      placeholder: existingEnv.TELEGRAM_ALLOWED_USERS || "123456789,987654321",
+      initialValue: existingEnv.TELEGRAM_ALLOWED_USERS,
+    }));
+
     envVars.TELEGRAM_BOT_TOKEN = token;
-    if (users) envVars.TELEGRAM_ALLOWED_USERS = users;
+    const usersClean = users
+      .split(",")
+      .map((s: string) => s.trim())
+      .filter(Boolean)
+      .join(",");
+    if (usersClean) envVars.TELEGRAM_ALLOWED_USERS = usersClean;
   }
 
   if (selected.includes("discord")) {
-    heading("Step 4b: Discord Bot Configuration");
-    info("You need a bot token from the Discord Developer Portal.");
-    info("  https://discord.com/developers/applications");
-    console.log();
-    const token = await askInput(
-      "Bot token",
-      existingEnv.DISCORD_BOT_TOKEN,
-    );
-    const users = await askCommaList(
-      "Allowed Discord user IDs",
-      existingEnv.DISCORD_ALLOWED_USERS ||
+    p.log.step("Step 4b: Discord Bot Configuration");
+    p.log.info("You need a bot token from the Discord Developer Portal.");
+    p.log.info("  https://discord.com/developers/applications");
+
+    const token = cancelGuard(await p.text({
+      message: "Bot token:",
+      placeholder: "MTIzNDU2Nzg5...",
+      initialValue: existingEnv.DISCORD_BOT_TOKEN,
+      validate: (v) => {
+        if (!v || v.trim().length === 0) return "A bot token is required.";
+      },
+    }));
+
+    const users = cancelGuard(await p.text({
+      message: "Allowed Discord user IDs (comma-separated):",
+      placeholder:
+        existingEnv.DISCORD_ALLOWED_USERS ||
         "123456789012345678,987654321098765432",
-    );
+      initialValue: existingEnv.DISCORD_ALLOWED_USERS,
+    }));
+
     envVars.DISCORD_BOT_TOKEN = token;
-    if (users) envVars.DISCORD_ALLOWED_USERS = users;
+    const usersClean = users
+      .split(",")
+      .map((s: string) => s.trim())
+      .filter(Boolean)
+      .join(",");
+    if (usersClean) envVars.DISCORD_ALLOWED_USERS = usersClean;
   }
 
   if (selected.includes("scheduler")) {
-    heading("Step 4c: Task Scheduler Configuration");
-    info("The scheduler uses scheduler/tasks.yaml for task definitions.");
-    info("You can customize it later.");
-    console.log();
-    ok("Default tasks.yaml will be used.");
+    p.log.step("Step 4c: Task Scheduler Configuration");
+    p.log.info("The scheduler uses scheduler/tasks.yaml for task definitions.");
+    p.log.success("Default tasks.yaml will be used. You can customize it later.");
   }
 
   return envVars;
@@ -538,47 +468,54 @@ async function stepModuleConfig(
 // ---------------------------------------------------------------------------
 
 async function stepAgentIdentity(): Promise<void> {
-  heading("Step 5: Agent Identity");
-  info("Choose a name for your agent.");
-  info("This is how the agent will introduce itself in chat.");
-  console.log();
+  p.log.step("Step 5: Agent Identity");
+  p.log.info("Choose a name for your agent. This is how the agent will introduce itself in chat.");
 
-  const agentName = await askInput("Agent name", "Atlas");
+  const agentName = cancelGuard(await p.text({
+    message: "Agent name:",
+    placeholder: "Atlas",
+    defaultValue: "Atlas",
+  }));
 
   // Generate ~/.claude-agent/workspace/CLAUDE.md from template
-  const templatePath = path.join(PROJECT_ROOT, "data", "workspace-claude.template.md");
-  const workspaceDir = path.join(os.homedir(), ".claude-agent", "workspace");
-  const outPath = path.join(workspaceDir, "CLAUDE.md");
+  const templatePath = nodePath.join(PROJECT_ROOT, "data", "workspace-claude.template.md");
+  const workspaceDir = nodePath.join(os.homedir(), ".claude-agent", "workspace");
+  const outPath = nodePath.join(workspaceDir, "CLAUDE.md");
+
   if (fs.existsSync(templatePath)) {
     let shouldWrite = true;
     if (fs.existsSync(outPath)) {
-      console.log();
-      warn("Existing workspace CLAUDE.md detected.");
-      shouldWrite = await askYesNo("  Overwrite with new agent name?", false);
+      p.log.warn("Existing workspace CLAUDE.md detected.");
+      shouldWrite = cancelGuard(await p.confirm({
+        message: "Overwrite with new agent name?",
+        initialValue: false,
+      }));
     }
     if (shouldWrite) {
+      const s = p.spinner();
+      s.start("Writing workspace CLAUDE.md...");
       fs.mkdirSync(workspaceDir, { recursive: true });
       const template = fs.readFileSync(templatePath, "utf-8");
       const content = template.replace(/\{AGENT_NAME\}/g, agentName);
       fs.writeFileSync(outPath, content, "utf-8");
-      ok(`Workspace CLAUDE.md written with agent name: ${agentName}`);
+      s.stop(`Workspace CLAUDE.md written with agent name: ${agentName}`);
     } else {
-      info("Keeping existing workspace CLAUDE.md.");
+      p.log.info("Keeping existing workspace CLAUDE.md.");
     }
   } else {
-    warn("Template data/workspace-claude.template.md not found — skipping.");
+    p.log.warn("Template data/workspace-claude.template.md not found -- skipping.");
   }
 
   // Update data/brain.md from template with agent name
-  const brainTemplatePath = path.join(PROJECT_ROOT, "data", "brain.template.md");
-  const brainPath = path.join(PROJECT_ROOT, "data", "brain.md");
+  const brainTemplatePath = nodePath.join(PROJECT_ROOT, "data", "brain.template.md");
+  const brainPath = nodePath.join(PROJECT_ROOT, "data", "brain.md");
   if (fs.existsSync(brainTemplatePath) && !fs.existsSync(brainPath)) {
     const brainTemplate = fs.readFileSync(brainTemplatePath, "utf-8");
     const brainContent = brainTemplate.replace(/\{AGENT_NAME\}/g, agentName);
     fs.writeFileSync(brainPath, brainContent, "utf-8");
-    ok(`Brain initialized for ${agentName}`);
+    p.log.success(`Brain initialized for ${agentName}`);
   } else if (fs.existsSync(brainPath)) {
-    info("Existing brain.md found — not overwriting.");
+    p.log.info("Existing brain.md found -- not overwriting.");
   }
 }
 
@@ -589,76 +526,86 @@ async function stepAgentIdentity(): Promise<void> {
 async function stepClaudeSettings(
   existingEnv: Record<string, string>,
 ): Promise<Record<string, string>> {
-  heading("Step 6: Claude Permissions");
-  info("Claude Code needs permission to use tools (read files, edit code, run");
-  info("commands, etc). Without this, the bot can only answer questions but");
-  info("cannot actually work on your code.");
-  console.log();
-  info("Choose a permission level:");
-  console.log();
-  info("  1) Read-only        — Can read files and search code");
-  info("                        Tools: Read, Glob, Grep");
-  console.log();
-  info("  2) Read + Write     — Can read, edit files, and run commands (recommended)");
-  info("                        Tools: Read, Write, Edit, Bash, Glob, Grep");
-  console.log();
-  info("  3) Full access      — All tools including web search and fetch");
-  info("                        Tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch");
-  console.log();
-  info("  4) Custom           — Specify tools manually");
-  console.log();
+  p.log.step("Step 6: Claude Permissions");
+  p.log.info(
+    "Claude Code needs permission to use tools (read files, edit code, run commands, etc).",
+  );
 
   const PRESETS: Record<string, string> = {
-    "1": "Read,Glob,Grep",
-    "2": "Read,Write,Edit,Bash,Glob,Grep",
-    "3": "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch",
+    readonly: "Read,Glob,Grep",
+    readwrite: "Read,Write,Edit,Bash,Glob,Grep",
+    full: "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch",
+    custom: "",
   };
 
   const existingTools = existingEnv.CLAUDE_ALLOWED_TOOLS;
-  let defaultChoice = "2";
+  let initialValue: string = "readwrite";
   if (existingTools) {
-    // Detect which preset matches
     const match = Object.entries(PRESETS).find(([, v]) => v === existingTools);
-    defaultChoice = match ? match[0] : "4";
+    initialValue = match ? match[0] : "custom";
   }
 
-  const choice = await askInput(
-    `Permission level [1-4]`,
-    defaultChoice,
-  );
+  const choice = cancelGuard(await p.select({
+    message: "Permission level:",
+    options: [
+      {
+        value: "readonly",
+        label: "Read-only",
+        hint: "Read, Glob, Grep",
+      },
+      {
+        value: "readwrite",
+        label: "Read + Write (recommended)",
+        hint: "Read, Write, Edit, Bash, Glob, Grep",
+      },
+      {
+        value: "full",
+        label: "Full access",
+        hint: "All tools including WebFetch, WebSearch",
+      },
+      {
+        value: "custom",
+        label: "Custom",
+        hint: "Specify tools manually",
+      },
+    ],
+    initialValue,
+  }));
 
   const envVars: Record<string, string> = {};
 
-  if (choice === "4") {
-    info("Available tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch");
-    const custom = await askInput(
-      "Tools (comma-separated)",
-      existingTools ?? "Read,Write,Edit,Bash,Glob,Grep",
-    );
+  if (choice === "custom") {
+    p.log.info("Available tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch");
+    const custom = cancelGuard(await p.text({
+      message: "Tools (comma-separated):",
+      placeholder: "Read,Write,Edit,Bash,Glob,Grep",
+      initialValue: existingTools ?? "Read,Write,Edit,Bash,Glob,Grep",
+      validate: (v) => {
+        if (!v || v.trim().length === 0) return "At least one tool is required.";
+      },
+    }));
     envVars.CLAUDE_ALLOWED_TOOLS = custom;
   } else {
-    const tools = PRESETS[choice] ?? PRESETS["2"];
-    envVars.CLAUDE_ALLOWED_TOOLS = tools;
+    envVars.CLAUDE_ALLOWED_TOOLS = PRESETS[choice];
   }
 
-  ok(`Tools: ${envVars.CLAUDE_ALLOWED_TOOLS}`);
-  console.log();
+  p.log.success(`Tools: ${envVars.CLAUDE_ALLOWED_TOOLS}`);
 
   // Optional: model override
-  const model = await askInput(
-    "Claude model (leave empty for default)",
-    existingEnv.CLAUDE_MODEL ?? "",
-    true,
-  );
-  if (model) envVars.CLAUDE_MODEL = model;
+  const model = cancelGuard(await p.text({
+    message: "Claude model (leave empty for default):",
+    placeholder: "e.g. claude-sonnet-4-6",
+    initialValue: existingEnv.CLAUDE_MODEL ?? "",
+  }));
+  if (model.trim()) envVars.CLAUDE_MODEL = model.trim();
 
   // Optional: project directory
-  const projectDir = await askInput(
-    "Default project directory (leave empty for current dir)",
-    existingEnv.CLAUDE_PROJECT_DIR ?? "",
-    true,
-  );
-  if (projectDir) envVars.CLAUDE_PROJECT_DIR = projectDir;
+  const projectDir = cancelGuard(await p.text({
+    message: "Default project directory (leave empty for current dir):",
+    placeholder: "/path/to/your/project",
+    initialValue: existingEnv.CLAUDE_PROJECT_DIR ?? "",
+  }));
+  if (projectDir.trim()) envVars.CLAUDE_PROJECT_DIR = projectDir.trim();
 
   return envVars;
 }
@@ -676,7 +623,7 @@ const ENV_SECTION_ORDER: Array<[string, string[]]> = [
 async function stepGenerateEnv(
   envVars: Record<string, string>,
 ): Promise<void> {
-  heading("Step 7: Generate .env");
+  p.log.step("Step 7: Generate .env");
 
   const lines: string[] = [];
   for (const [sectionName, keys] of ENV_SECTION_ORDER) {
@@ -711,8 +658,8 @@ async function stepGenerateEnv(
 
   const content = lines.join("\n") + "\n";
 
-  // Preview
-  console.log("  --- .env preview ---");
+  // Preview -- mask sensitive values
+  const previewLines: string[] = [];
   for (const line of content.trim().split("\n")) {
     if (line.includes("TOKEN") || line.includes("KEY")) {
       const eqIdx = line.indexOf("=");
@@ -721,29 +668,34 @@ async function stepGenerateEnv(
         const valPart = line.slice(eqIdx + 1);
         if (valPart.length > 10) {
           const masked = valPart.slice(0, 5) + "..." + valPart.slice(-3);
-          console.log(`  ${keyPart}=${masked}`);
+          previewLines.push(`${keyPart}=${masked}`);
         } else {
-          console.log(`  ${line}`);
+          previewLines.push(line);
         }
       } else {
-        console.log(`  ${line}`);
+        previewLines.push(line);
       }
     } else {
-      console.log(`  ${line}`);
+      previewLines.push(line);
     }
   }
-  console.log("  --- end preview ---");
-  console.log();
 
-  if (!(await askYesNo("  Write this .env file?", true))) {
-    warn("Skipped writing .env file.");
+  p.note(previewLines.join("\n"), ".env preview");
+
+  const write = cancelGuard(await p.confirm({
+    message: "Write this .env file?",
+    initialValue: true,
+  }));
+
+  if (!write) {
+    p.log.warn("Skipped writing .env file.");
     return;
   }
 
   fs.writeFileSync(ENV_FILE, content, { mode: 0o600 });
 
-  ok(`.env written to ${ENV_FILE}`);
-  ok("File permissions set to 0600 (owner read/write only)");
+  p.log.success(`.env written to ${ENV_FILE}`);
+  p.log.info("File permissions set to 0600 (owner read/write only)");
 }
 
 // ---------------------------------------------------------------------------
@@ -751,36 +703,41 @@ async function stepGenerateEnv(
 // ---------------------------------------------------------------------------
 
 async function stepInstallDeps(): Promise<void> {
-  heading("Step 8: Install Dependencies");
+  p.log.step("Step 8: Install Dependencies");
 
-  if (!(await askYesNo("  Run npm install now?", true))) {
-    warn("Skipping dependency installation.");
-    info("Run this command later:");
-    info("  npm install");
+  const install = cancelGuard(await p.confirm({
+    message: "Run npm install now?",
+    initialValue: true,
+  }));
+
+  if (!install) {
+    p.log.warn("Skipping dependency installation.");
+    p.log.info("Run this command later: npm install");
     return;
   }
 
-  info("Installing dependencies...");
+  const s = p.spinner();
+  s.start("Installing dependencies...");
   const result = runCmd(["npm", "install"], 120000);
   if (result.code === 0) {
-    ok("All dependencies installed");
+    s.stop("All dependencies installed");
 
     // Register claudebridge command globally
-    info("Registering claudebridge command...");
+    s.start("Registering claudebridge command...");
     const linkResult = runCmd(["npm", "link"], 30000);
     if (linkResult.code === 0) {
-      ok("'claudebridge' command registered (available system-wide)");
+      s.stop("'claudebridge' command registered (available system-wide)");
     } else {
-      warn("Could not register 'claudebridge' globally — use 'npx claudebridge' instead");
+      s.stop("Could not register 'claudebridge' globally -- use 'npx claudebridge' instead");
     }
   } else {
-    fail("Dependency installation failed");
+    s.stop("Dependency installation failed");
     if (result.stderr) {
       for (const line of result.stderr.split("\n").slice(0, 3)) {
-        info(`  ${line}`);
+        p.log.error(line);
       }
     }
-    info("Run 'npm install' manually to retry.");
+    p.log.info("Run 'npm install' manually to retry.");
   }
 }
 
@@ -791,36 +748,35 @@ async function stepInstallDeps(): Promise<void> {
 async function stepSystemdServices(selected: string[]): Promise<void> {
   if (!hasSystemctl()) return;
 
-  heading("Step 9: Systemd Services (optional)");
-  info("This server has systemd. You can install services so your");
-  info("bots start automatically and restart on failure.");
-  console.log();
+  p.log.step("Step 9: Systemd Services (optional)");
+  p.log.info("This server has systemd. You can install services so your bots start automatically and restart on failure.");
 
-  if (
-    !(await askYesNo(
-      "  Install systemd services for selected modules?",
-      false,
-    ))
-  ) {
-    info("Skipping systemd service installation.");
+  const installServices = cancelGuard(await p.confirm({
+    message: "Install systemd services for selected modules?",
+    initialValue: false,
+  }));
+
+  if (!installServices) {
+    p.log.info("Skipping systemd service installation.");
     return;
   }
 
+  const s = p.spinner();
   const installedServices: string[] = [];
   for (const mod of selected) {
     if (!(mod in SYSTEMD_SERVICE_MAP)) continue;
     const [srcPath, serviceName] = SYSTEMD_SERVICE_MAP[mod];
     if (!fs.existsSync(srcPath)) {
-      warn(`Service file not found: ${srcPath}`);
+      p.log.warn(`Service file not found: ${srcPath}`);
       continue;
     }
 
     const dest = `/etc/systemd/system/${serviceName}.service`;
-    info(`Installing ${serviceName}.service...`);
+    s.start(`Installing ${serviceName}.service...`);
 
     const cpResult = runCmd(["sudo", "cp", srcPath, dest], 10000);
     if (cpResult.code !== 0) {
-      fail(`Failed to copy ${serviceName}.service: ${cpResult.stderr}`);
+      s.stop(`Failed to copy ${serviceName}.service: ${cpResult.stderr}`);
       continue;
     }
 
@@ -830,25 +786,30 @@ async function stepSystemdServices(selected: string[]): Promise<void> {
       10000,
     );
     if (enableResult.code === 0) {
-      ok(`${serviceName} enabled`);
+      s.stop(`${serviceName} enabled`);
       installedServices.push(serviceName);
     } else {
-      fail(`Failed to enable ${serviceName}: ${enableResult.stderr}`);
+      s.stop(`Failed to enable ${serviceName}: ${enableResult.stderr}`);
     }
   }
 
   if (installedServices.length > 0) {
-    console.log();
-    if (await askYesNo("  Start the services now?", true)) {
+    const start = cancelGuard(await p.confirm({
+      message: "Start the services now?",
+      initialValue: true,
+    }));
+
+    if (start) {
       for (const svc of installedServices) {
+        s.start(`Starting ${svc}...`);
         const startResult = runCmd(
           ["sudo", "systemctl", "start", svc],
           15000,
         );
         if (startResult.code === 0) {
-          ok(`${svc} started`);
+          s.stop(`${svc} started`);
         } else {
-          fail(`Failed to start ${svc}: ${startResult.stderr}`);
+          s.stop(`Failed to start ${svc}: ${startResult.stderr}`);
         }
       }
     }
@@ -860,43 +821,50 @@ async function stepSystemdServices(selected: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function stepSummary(selected: string[]): void {
-  heading("Setup Complete");
+  const moduleLabels = selected.map((key) => {
+    const mod = MODULES.find((m) => m.value === key);
+    return mod ? mod.label : key;
+  });
 
-  const moduleMap = new Map(MODULES);
-
-  info("What was set up:");
-  for (const key of selected) {
-    ok(moduleMap.get(key)!);
+  const summaryLines = ["What was set up:"];
+  for (const label of moduleLabels) {
+    summaryLines.push(`  + ${label}`);
   }
   if (fs.existsSync(ENV_FILE)) {
-    ok(".env file configured");
+    summaryLines.push("  + .env file configured");
   }
-  if (fs.existsSync(path.join(PROJECT_ROOT, "node_modules"))) {
-    ok("Node modules installed");
+  if (fs.existsSync(nodePath.join(PROJECT_ROOT, "node_modules"))) {
+    summaryLines.push("  + Node modules installed");
   }
-  console.log();
 
-  info("Quick start:");
-  console.log();
-  info("  claudebridge start             # Start all services");
-  info("  claudebridge stop              # Stop all services");
-  info("  claudebridge status            # Show running services");
-  info("  claudebridge logs              # View service logs");
-  console.log();
-  info("Start individual services:");
-  console.log();
+  p.note(summaryLines.join("\n"), "Setup Complete");
+
+  const quickStart = [
+    "Quick start:",
+    "",
+    "  claudebridge start             # Start all services",
+    "  claudebridge stop              # Stop all services",
+    "  claudebridge status            # Show running services",
+    "  claudebridge logs              # View service logs",
+    "",
+    "Start individual services:",
+  ];
+
   if (selected.includes("telegram")) {
-    info("  claudebridge start telegram    # Start only Telegram bot");
+    quickStart.push("  claudebridge start telegram    # Start only Telegram bot");
   }
   if (selected.includes("discord")) {
-    info("  claudebridge start discord     # Start only Discord bot");
+    quickStart.push("  claudebridge start discord     # Start only Discord bot");
   }
   if (selected.includes("scheduler")) {
-    info("  claudebridge start scheduler   # Start only scheduler");
+    quickStart.push("  claudebridge start scheduler   # Start only scheduler");
   }
-  console.log();
-  info("Re-run this wizard:  claudebridge setup");
-  console.log();
+  quickStart.push("");
+  quickStart.push("Re-run this wizard:  claudebridge setup");
+
+  p.note(quickStart.join("\n"), "Next Steps");
+
+  p.outro("Happy coding!");
 }
 
 // ---------------------------------------------------------------------------
@@ -904,55 +872,46 @@ function stepSummary(selected: string[]): void {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  try {
-    // Load existing config for defaults
-    const existingEnv = loadExistingEnv();
+  // Load existing config for defaults
+  const existingEnv = loadExistingEnv();
 
-    // 1. Welcome
-    await stepWelcome();
+  // 1. Welcome
+  await stepWelcome();
 
-    // 2. Prerequisites (node 18+, npm, claude CLI)
-    await stepPrerequisites();
+  // 2. Prerequisites (node 18+, npm, claude CLI)
+  await stepPrerequisites();
 
-    // 3. Claude authentication
-    await stepClaudeAuth();
+  // 3. Claude authentication
+  await stepClaudeAuth();
 
-    // 4. Module selection
-    const selected = await stepModules();
+  // 4. Module selection
+  const selected = await stepModules();
 
-    // 5. Per-module config
-    const envVars = await stepModuleConfig(selected, existingEnv);
+  // 5. Per-module config
+  const envVars = await stepModuleConfig(selected, existingEnv);
 
-    // 6. Agent identity (name + system prompt)
-    await stepAgentIdentity();
+  // 6. Agent identity (name + system prompt)
+  await stepAgentIdentity();
 
-    // 7. Claude permissions & settings
-    const claudeVars = await stepClaudeSettings(existingEnv);
-    Object.assign(envVars, claudeVars);
+  // 7. Claude permissions & settings
+  const claudeVars = await stepClaudeSettings(existingEnv);
+  Object.assign(envVars, claudeVars);
 
-    // 8. Generate .env
-    await stepGenerateEnv(envVars);
+  // 8. Generate .env
+  await stepGenerateEnv(envVars);
 
-    // 9. Install dependencies (npm install)
-    await stepInstallDeps();
+  // 9. Install dependencies (npm install)
+  await stepInstallDeps();
 
-    // 10. Optionally install systemd services (Linux only)
-    await stepSystemdServices(selected);
+  // 10. Optionally install systemd services (Linux only)
+  await stepSystemdServices(selected);
 
-    // 11. Summary
-    stepSummary(selected);
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("readline was closed")) {
-      console.log("\n\n  Setup cancelled.");
-      process.exit(1);
-    }
-    throw e;
-  } finally {
-    rl.close();
-  }
+  // 11. Summary
+  stepSummary(selected);
 }
 
 main().catch((err) => {
+  p.cancel("An unexpected error occurred.");
   console.error(err);
   process.exit(1);
 });

@@ -36,7 +36,7 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 git clone https://github.com/yourusername/claude-agent.git
 cd claude-agent
 npm install
-npx tsx setup.ts
+npm run setup
 ```
 
 The setup wizard walks you through:
@@ -70,6 +70,8 @@ npm run scheduler           # Run scheduler directly
 - **croner** -- cron scheduling
 - **dotenv** -- environment variable loading
 - **tsx** -- TypeScript execution without a compile step
+- **@clack/prompts** -- interactive CLI prompts for the setup wizard
+- **boxen**, **figlet**, **gradient-string**, **picocolors**, **nanospinner** -- setup wizard UI
 
 ## Architecture
 

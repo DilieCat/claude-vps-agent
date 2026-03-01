@@ -23,6 +23,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@clack/prompts": "^1.0.1",
     "boxen": "^8.0.1",
     "croner": "^8.1.0",
     "discord.js": "^14.16.0",
