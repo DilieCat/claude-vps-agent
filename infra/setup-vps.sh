@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup-vps.sh — Idempotent VPS provisioning for claude-vps-agent
+# setup-vps.sh — Idempotent VPS provisioning for claudebridge
 #
 # Usage:
 #   scp infra/setup-vps.sh user@vps:/tmp/ && ssh user@vps 'sudo bash /tmp/setup-vps.sh'
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 CLAUDE_USER="claude"
-PROJECT_DIR="/home/${CLAUDE_USER}/claude-vps-agent"
+PROJECT_DIR="/home/${CLAUDE_USER}/claudebridge"
 NODE_MAJOR=22
 
 log() { echo "=== [$1] $2 ==="; }

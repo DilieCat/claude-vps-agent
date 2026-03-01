@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — Deploy claude-vps-agent to a remote VPS via rsync + SSH
+# deploy.sh — Deploy claudebridge to a remote VPS via rsync + SSH
 #
 # Usage:
 #   ./scripts/deploy.sh                   # Uses VPS_HOST/VPS_USER from .env
@@ -24,7 +24,7 @@ fi
 VPS_HOST="${1:-${VPS_HOST:-}}"
 VPS_USER="${2:-${VPS_USER:-claude}}"
 VPS_PORT="${VPS_PORT:-22}"
-REMOTE_DIR="/home/${VPS_USER}/claude-vps-agent"
+REMOTE_DIR="/home/${VPS_USER}/claudebridge"
 
 if [ -z "${VPS_HOST}" ]; then
   echo "Error: VPS_HOST is required."
@@ -60,7 +60,7 @@ echo ""
 echo "=== [2/4] Installing Python dependencies ==="
 ${SSH_CMD} bash -s <<'REMOTESH'
 set -euo pipefail
-cd ~/claude-vps-agent
+cd ~/claudebridge
 
 # Create venv if it doesn't exist
 if [ ! -d .venv ]; then
@@ -82,7 +82,7 @@ echo ""
 echo "=== [3/4] Installing systemd services ==="
 ${SSH_CMD} bash -s <<'REMOTESH'
 set -euo pipefail
-SERVICES_SRC=~/claude-vps-agent/infra/systemd
+SERVICES_SRC=~/claudebridge/infra/systemd
 SERVICES_DST=/etc/systemd/system
 
 changed=false

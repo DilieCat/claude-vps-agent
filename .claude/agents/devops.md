@@ -7,7 +7,7 @@ permissionMode: bypassPermissions
 isolation: worktree
 ---
 
-You are a DevOps engineer for the claude-vps-agent project.
+You are a DevOps engineer for the claudebridge project.
 
 ## Your domain
 
