@@ -454,6 +454,43 @@ async function stepModuleConfig(
     if (usersClean) envVars.DISCORD_ALLOWED_USERS = usersClean;
   }
 
+  // Code mode config (optional, tied to Discord)
+  if (selected.includes("discord")) {
+    const enableCodeMode = cancelGuard(await p.confirm({
+      message: "Enable Claude Code Mode? (full IDE sessions through Discord threads)",
+      initialValue: existingEnv.CODE_MODE_ENABLED === "true" || false,
+    }));
+
+    if (enableCodeMode) {
+      envVars.CODE_MODE_ENABLED = "true";
+
+      const codeProject = cancelGuard(await p.text({
+        message: "Default project directory for code sessions:",
+        placeholder: "/home/claude/projects",
+        initialValue: existingEnv.CODE_MODE_DEFAULT_PROJECT ?? "/home/claude/projects",
+      }));
+      envVars.CODE_MODE_DEFAULT_PROJECT = codeProject;
+
+      const codeBudget = cancelGuard(await p.text({
+        message: "Max budget per code session request (USD):",
+        placeholder: "5.00",
+        initialValue: existingEnv.CODE_MODE_MAX_BUDGET_USD ?? "5.00",
+      }));
+      envVars.CODE_MODE_MAX_BUDGET_USD = codeBudget;
+
+      const mcpConfig = cancelGuard(await p.text({
+        message: "MCP config file path (leave empty to skip):",
+        placeholder: "config/mcp-servers.json",
+        initialValue: existingEnv.CODE_MODE_MCP_CONFIG ?? "",
+      }));
+      if (mcpConfig.trim()) {
+        envVars.CODE_MODE_MCP_CONFIG = mcpConfig.trim();
+      }
+    } else {
+      envVars.CODE_MODE_ENABLED = "false";
+    }
+  }
+
   if (selected.includes("scheduler")) {
     p.log.step("Step 4c: Task Scheduler Configuration");
     p.log.info("The scheduler uses scheduler/tasks.yaml for task definitions.");
@@ -618,6 +655,7 @@ const ENV_SECTION_ORDER: Array<[string, string[]]> = [
   ["Claude Settings", ["CLAUDE_ALLOWED_TOOLS", "CLAUDE_MODEL", "CLAUDE_PROJECT_DIR"]],
   ["Telegram Bot", ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"]],
   ["Discord Bot", ["DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USERS"]],
+  ["Claude Code Mode", ["CODE_MODE_ENABLED", "CODE_MODE_DEFAULT_PROJECT", "CODE_MODE_MAX_BUDGET_USD", "CODE_MODE_TOOLS", "CODE_MODE_MCP_CONFIG"]],
 ];
 
 async function stepGenerateEnv(

@@ -27,7 +27,7 @@ import {
   type DMChannel,
 } from "discord.js";
 import { ClaudeBridge, LivingBridge, NotificationQueue, splitMessage, loadNotifyPrefs, saveNotifyPrefs, logCost, getCosts, getTotalCost } from "../lib/index.js";
-import type { Notification } from "../lib/index.js";
+import type { Notification, StreamEvent } from "../lib/index.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -45,6 +45,14 @@ const CLAUDE_ALLOWED_TOOLS = process.env["CLAUDE_ALLOWED_TOOLS"] ?? "";
 
 const DISCORD_MAX_LEN = 2000;
 const NOTIFICATION_POLL_INTERVAL = 60_000; // ms
+
+// Code Mode config
+const CODE_MODE_ENABLED = (process.env["CODE_MODE_ENABLED"] ?? "false").toLowerCase() === "true";
+const CODE_MODE_DEFAULT_PROJECT = process.env["CODE_MODE_DEFAULT_PROJECT"] ?? process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
+const CODE_MODE_MAX_BUDGET_USD = parseFloat(process.env["CODE_MODE_MAX_BUDGET_USD"] ?? "5.00");
+const CODE_MODE_TOOLS = (process.env["CODE_MODE_TOOLS"] ?? "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch")
+  .split(",").map((t) => t.trim()).filter(Boolean);
+const CODE_MODE_MCP_CONFIG = process.env["CODE_MODE_MCP_CONFIG"];
 
 const ALLOWED_PROJECT_BASE: string = fs.realpathSync(
   process.env["ALLOWED_PROJECT_BASE"] ?? (process.env["HOME"] ?? "."),
@@ -66,6 +74,63 @@ const userSettings = new Map<string, UserSettings>();
 
 // Concurrency control — single-user environment, one request at a time
 let isProcessing = false;
+
+// ---------------------------------------------------------------------------
+// Code session tracking (Claude Code IDE through Discord threads)
+// ---------------------------------------------------------------------------
+interface CodeSession {
+  sessionId: string | null;   // Claude session ID (null = first message)
+  projectDir: string;         // working directory
+  userId: string;             // session owner
+  createdAt: number;
+  isProcessing: boolean;      // per-session concurrency lock
+}
+const codeSessions = new Map<string, CodeSession>();
+const CODE_SESSIONS_PATH = path.join(PROJECT_ROOT, "data", "discord_code_sessions.json");
+
+function loadCodeSessions(): void {
+  try {
+    if (!fs.existsSync(CODE_SESSIONS_PATH)) return;
+    const data = JSON.parse(fs.readFileSync(CODE_SESSIONS_PATH, "utf-8")) as Array<{
+      threadId: string;
+      sessionId: string | null;
+      projectDir: string;
+      userId: string;
+      createdAt: number;
+    }>;
+    for (const entry of data) {
+      codeSessions.set(entry.threadId, {
+        sessionId: entry.sessionId,
+        projectDir: entry.projectDir,
+        userId: entry.userId,
+        createdAt: entry.createdAt,
+        isProcessing: false,
+      });
+    }
+    console.log(`[discord] Loaded ${codeSessions.size} code sessions from disk.`);
+  } catch (err) {
+    console.warn(`[discord] Could not load code sessions: ${err}`);
+  }
+}
+
+function saveCodeSessions(): void {
+  try {
+    fs.mkdirSync(path.dirname(CODE_SESSIONS_PATH), { recursive: true });
+    const data = [...codeSessions.entries()].map(([threadId, s]) => ({
+      threadId,
+      sessionId: s.sessionId,
+      projectDir: s.projectDir,
+      userId: s.userId,
+      createdAt: s.createdAt,
+    }));
+    fs.writeFileSync(CODE_SESSIONS_PATH, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.warn(`[discord] Could not save code sessions: ${err}`);
+  }
+}
+
+// Load persisted sessions at startup
+loadCodeSessions();
 
 // ---------------------------------------------------------------------------
 // Bridge instance — try LivingBridge, fall back to ClaudeBridge
@@ -250,6 +315,16 @@ const commands = [
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("Show help for the Claude Discord bot"),
+  new SlashCommandBuilder()
+    .setName("claudecode")
+    .setDescription("Start a Claude Code session in a new thread")
+    .addStringOption((opt) =>
+      opt.setName("project")
+        .setDescription("Project directory (optional)")
+        .setRequired(false)),
+  new SlashCommandBuilder()
+    .setName("endcode")
+    .setDescription("End the current Claude Code session"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -326,6 +401,228 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
     logCost(response.costUsd, response.numTurns, response.durationMs, prompt);
   } finally {
     isProcessing = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Code session handler — streaming Claude Code through Discord threads
+// ---------------------------------------------------------------------------
+
+const TOOL_EMOJI: Record<string, string> = {
+  Write: "\u{1F4DD}",   // 📝
+  Edit: "\u270F\uFE0F", // ✏️
+  Read: "\u{1F4D6}",    // 📖
+  Bash: "\u2699\uFE0F", // ⚙️
+  Glob: "\u{1F50D}",    // 🔍
+  Grep: "\u{1F50D}",    // 🔍
+  WebFetch: "\u{1F310}", // 🌐
+  WebSearch: "\u{1F310}", // 🌐
+};
+
+function formatToolCall(name: string, input: Record<string, unknown>): string {
+  const emoji = TOOL_EMOJI[name] ?? "\u{1F527}"; // 🔧 fallback
+  let label = "";
+
+  if (name === "Write") {
+    label = `${emoji} **Write** \`${input["file_path"] ?? "?"}\``;
+    const content = input["content"] as string | undefined;
+    if (content) {
+      const ext = String(input["file_path"] ?? "").split(".").pop() ?? "";
+      const preview = content.length > 1500 ? content.slice(0, 1500) + "\n..." : content;
+      label += `\n\`\`\`${ext}\n${preview}\n\`\`\``;
+    }
+  } else if (name === "Edit") {
+    label = `${emoji} **Edit** \`${input["file_path"] ?? "?"}\``;
+    const oldStr = input["old_string"] as string | undefined;
+    const newStr = input["new_string"] as string | undefined;
+    if (oldStr && newStr) {
+      const diffPreview =
+        `- ${oldStr.split("\n").slice(0, 5).join("\n- ")}`.slice(0, 500) + "\n" +
+        `+ ${newStr.split("\n").slice(0, 5).join("\n+ ")}`.slice(0, 500);
+      label += `\n\`\`\`diff\n${diffPreview}\n\`\`\``;
+    }
+  } else if (name === "Read") {
+    label = `${emoji} **Read** \`${input["file_path"] ?? "?"}\``;
+  } else if (name === "Bash") {
+    const cmd = (input["command"] as string) ?? "?";
+    label = `${emoji} **Bash** \`${cmd.length > 200 ? cmd.slice(0, 200) + "..." : cmd}\``;
+  } else if (name === "Glob") {
+    label = `${emoji} **Glob** \`${input["pattern"] ?? "?"}\``;
+  } else if (name === "Grep") {
+    label = `${emoji} **Grep** \`${input["pattern"] ?? "?"}\``;
+  } else {
+    label = `${emoji} **${name}**`;
+    const summary = JSON.stringify(input).slice(0, 200);
+    if (summary.length > 2) label += ` \`${summary}\``;
+  }
+
+  return label;
+}
+
+function formatToolResult(content: string, isError: boolean): string {
+  if (isError) {
+    return `\u274C Error: ${content.slice(0, 500)}`;
+  }
+  if (content.length < 500) {
+    return content ? `\`\`\`\n${content}\n\`\`\`` : "\u2705 Done";
+  }
+  return `\`\`\`\n${content.slice(0, 1500)}\n...\n\`\`\``;
+}
+
+async function handleCodeMessage(
+  message: { channel: ThreadChannel; author: { id: string; tag: string }; content: string },
+  session: CodeSession,
+): Promise<void> {
+  const thread = message.channel;
+
+  // Auth check
+  if (!isAllowed(message.author.id, message.author.tag)) {
+    await thread.send("You are not authorized to use this session.");
+    return;
+  }
+
+  // Per-session concurrency
+  if (session.isProcessing) {
+    await thread.send("Still processing the previous request. Please wait...");
+    return;
+  }
+  session.isProcessing = true;
+
+  const startTime = Date.now();
+
+  try {
+    // Create a dedicated bridge for code mode
+    const codeBridge = new ClaudeBridge({
+      projectDir: session.projectDir,
+      allowedTools: CODE_MODE_TOOLS,
+      maxBudgetUsd: CODE_MODE_MAX_BUDGET_USD,
+      dangerouslySkipPermissions: true,
+      mcpConfig: CODE_MODE_MCP_CONFIG,
+      cwdOverride: session.projectDir,
+      timeoutSeconds: 600, // 10 min for code tasks
+    });
+
+    // Typing indicator
+    await thread.sendTyping();
+    const typingInterval = setInterval(() => {
+      thread.sendTyping().catch(() => {});
+    }, 8_000);
+
+    // Streaming state
+    let currentMsg: import("discord.js").Message | null = null;
+    let textBuffer = "";
+    let lastEditTime = 0;
+    const EDIT_INTERVAL = 1200; // ms between Discord message edits
+    let editTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Flush text buffer to Discord
+    const flushText = async () => {
+      if (!textBuffer) return;
+      try {
+        if (currentMsg && textBuffer.length <= 1800) {
+          // Edit existing message
+          await currentMsg.edit(textBuffer);
+        } else if (currentMsg && textBuffer.length > 1800) {
+          // Finalize current, start new
+          await currentMsg.edit(textBuffer.slice(0, 1800) + "...");
+          textBuffer = textBuffer.slice(1800);
+          currentMsg = await thread.send(textBuffer);
+        } else {
+          // New message
+          currentMsg = await thread.send(textBuffer);
+        }
+        lastEditTime = Date.now();
+      } catch (err) {
+        console.error("[discord] Code session text flush error:", err);
+      }
+    };
+
+    // Schedule a deferred flush
+    const scheduleFlush = () => {
+      if (editTimer) return;
+      const elapsed = Date.now() - lastEditTime;
+      const delay = Math.max(0, EDIT_INTERVAL - elapsed);
+      editTimer = setTimeout(async () => {
+        editTimer = null;
+        await flushText();
+      }, delay);
+    };
+
+    try {
+      const response = await codeBridge.askStreaming(
+        message.content,
+        async (event: StreamEvent) => {
+          if (event.type === "assistant" && event.message?.content) {
+            for (const block of event.message.content) {
+              if (block.type === "text" && block.text) {
+                // Accumulate text
+                textBuffer += block.text;
+                scheduleFlush();
+              } else if (block.type === "tool_use" && block.name) {
+                // Flush any pending text first
+                if (editTimer) { clearTimeout(editTimer); editTimer = null; }
+                await flushText();
+                textBuffer = "";
+                currentMsg = null;
+
+                // Format and send tool call
+                const toolMsg = formatToolCall(block.name, (block.input ?? {}) as Record<string, unknown>);
+                const chunks = splitMessage(toolMsg, DISCORD_MAX_LEN);
+                for (const chunk of chunks) {
+                  await thread.send(chunk);
+                }
+              }
+            }
+          } else if (event.type === "user" && event.message?.content) {
+            // Tool results
+            for (const block of event.message.content) {
+              if (block.type === "tool_result") {
+                const resultText = typeof block.content === "string"
+                  ? block.content
+                  : "";
+                const formatted = formatToolResult(resultText, block.is_error ?? false);
+                if (formatted.length > 3) {
+                  const chunks = splitMessage(formatted, DISCORD_MAX_LEN);
+                  for (const chunk of chunks) {
+                    await thread.send(chunk);
+                  }
+                }
+              }
+            }
+          }
+        },
+        session.sessionId ?? undefined,
+      );
+
+      // Final flush
+      if (editTimer) { clearTimeout(editTimer); editTimer = null; }
+      await flushText();
+
+      clearInterval(typingInterval);
+
+      // Update session ID for resume
+      if (response.sessionId) {
+        session.sessionId = response.sessionId;
+        saveCodeSessions();
+      }
+
+      // Result footer
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      const footer = response.isError
+        ? `\u2500\u2500\u2500 \u274C Error \u2500\u2500\u2500\n-# [CODE] Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns} | Duration: ${duration}s`
+        : `\u2500\u2500\u2500 \u2705 Done \u2500\u2500\u2500\n-# [CODE] Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns} | Duration: ${duration}s`;
+      await thread.send(footer);
+
+      // Log cost
+      logCost(response.costUsd, response.numTurns, response.durationMs, `[CODE] ${message.content}`);
+    } catch (err) {
+      clearInterval(typingInterval);
+      if (editTimer) { clearTimeout(editTimer); editTimer = null; }
+      console.error("[discord] Code session error:", err);
+      await thread.send(`**Error:** ${String(err)}`);
+    }
+  } finally {
+    session.isProcessing = false;
   }
 }
 
@@ -529,6 +826,93 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     await interaction.reply({ content: text, ephemeral: true });
+  } else if (commandName === "claudecode") {
+    if (!CODE_MODE_ENABLED) {
+      await interaction.reply({ content: "Code mode is not enabled. Set `CODE_MODE_ENABLED=true` in your .env file.", ephemeral: true });
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      await interaction.reply({ content: "This command can only be used in a text channel.", ephemeral: true });
+      return;
+    }
+
+    // Determine project dir
+    const projectArg = interaction.options.getString("project");
+    let projectDir = CODE_MODE_DEFAULT_PROJECT;
+    if (projectArg) {
+      let validated: string | null;
+      try {
+        validated = validateProjectPath(projectArg);
+      } catch {
+        validated = null;
+      }
+      if (!validated) {
+        await interaction.reply({ content: `Invalid project path: \`${projectArg}\`. Must be inside \`${ALLOWED_PROJECT_BASE}\`.`, ephemeral: true });
+        return;
+      }
+      projectDir = validated;
+    }
+
+    await interaction.deferReply();
+
+    // Create thread
+    const now = new Date();
+    const threadName = `Claude Code — ${now.toISOString().replace("T", " ").slice(0, 16)}`;
+    const thread = await (channel as TextChannel).threads.create({
+      name: threadName,
+      autoArchiveDuration: 1440, // 24 hours
+    });
+
+    // Register session
+    const session: CodeSession = {
+      sessionId: null,
+      projectDir,
+      userId,
+      createdAt: Date.now(),
+      isProcessing: false,
+    };
+    codeSessions.set(thread.id, session);
+    saveCodeSessions();
+
+    // Welcome message
+    await thread.send(
+      `**Claude Code session started.**\n` +
+      `Project: \`${projectDir}\`\n` +
+      `Budget: $${CODE_MODE_MAX_BUDGET_USD.toFixed(2)} per request\n\n` +
+      `Type your instructions here. All messages in this thread go directly to Claude Code.\n` +
+      `Use \`/endcode\` to end the session.`
+    );
+
+    await interaction.editReply(`Code session started in ${thread}.`);
+
+  } else if (commandName === "endcode") {
+    const channel = interaction.channel;
+    if (!channel?.isThread()) {
+      await interaction.reply({ content: "This command can only be used inside a code session thread.", ephemeral: true });
+      return;
+    }
+
+    const session = codeSessions.get(channel.id);
+    if (!session) {
+      await interaction.reply({ content: "This thread is not a code session.", ephemeral: true });
+      return;
+    }
+
+    // Remove session
+    codeSessions.delete(channel.id);
+    saveCodeSessions();
+
+    await interaction.reply("**Code session ended.** This thread is now archived.");
+
+    // Archive thread
+    try {
+      await (channel as ThreadChannel).setArchived(true);
+    } catch (err) {
+      console.warn(`[discord] Could not archive thread: ${err}`);
+    }
+
   } else if (commandName === "help") {
     const modeLabel = livingMode ? "living agent" : "stateless";
     let helpText =
@@ -542,6 +926,8 @@ client.on("interactionCreate", async (interaction) => {
       "`/model [name]` — View or change the Claude model\n" +
       "`/costs [period]` — Show usage costs (today/week/month/all)\n" +
       "`/respond <mode>` — Set response mode: `all` (respond to all messages) or `mentions` (only when @mentioned)\n" +
+      "`/claudecode [project]` — Start an interactive Claude Code session in a new thread\n" +
+      "`/endcode` — End the current Claude Code session\n" +
       "`/help` — Show this help message\n\n" +
       "**Notes:**\n" +
       "- Each `/ask` creates a new thread for the conversation.\n" +
@@ -563,6 +949,18 @@ client.on("interactionCreate", async (interaction) => {
 client.on("messageCreate", async (message) => {
   // Ignore own messages
   if (message.author.bot) return;
+
+  // Check if this is a code session thread
+  if (message.channel.isThread()) {
+    const session = codeSessions.get(message.channel.id);
+    if (session) {
+      await handleCodeMessage(
+        { channel: message.channel as ThreadChannel, author: message.author, content: message.content },
+        session,
+      );
+      return; // skip normal chat handling
+    }
+  }
 
   // Determine if we should respond:
   // 1. DMs — always respond
@@ -705,6 +1103,7 @@ client.once("ready", async () => {
   } else {
     console.log("[discord] Notifications: disabled");
   }
+  console.log(`[discord] Code mode: ${CODE_MODE_ENABLED ? "enabled" : "disabled"}${CODE_MODE_ENABLED ? ` (project: ${CODE_MODE_DEFAULT_PROJECT}, budget: $${CODE_MODE_MAX_BUDGET_USD})` : ""}`);
 
   // Register slash commands
   if (client.user) {
