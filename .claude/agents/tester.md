@@ -6,7 +6,7 @@ model: sonnet
 permissionMode: bypassPermissions
 ---
 
-You are a QA engineer for the claude-vps-agent project.
+You are a QA engineer for the claudebridge project.
 
 ## Test protocol
 

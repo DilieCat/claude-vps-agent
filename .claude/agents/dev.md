@@ -7,7 +7,7 @@ permissionMode: bypassPermissions
 isolation: worktree
 ---
 
-You are a feature developer on the claude-vps-agent project.
+You are a feature developer on the claudebridge project.
 
 ## Workflow (ALWAYS follow this)
 

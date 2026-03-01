@@ -7,10 +7,10 @@ Wants=network-online.target
 Type=simple
 User=claude
 Group=claude
-WorkingDirectory=/home/claude/claude-vps-agent
-EnvironmentFile=/home/claude/claude-vps-agent/.env
+WorkingDirectory=/home/claude/claudebridge
+EnvironmentFile=/home/claude/claudebridge/.env
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/npx tsx /home/claude/claude-vps-agent/src/bots/discord.ts
+ExecStart=/usr/bin/npx tsx /home/claude/claudebridge/src/bots/discord.ts
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
@@ -20,7 +20,7 @@ SyslogIdentifier=claude-discord-bot
 # Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/home/claude/claude-vps-agent /home/claude/.config /home/claude/.claude /home/claude/projects
+ReadWritePaths=/home/claude/claudebridge /home/claude/.config /home/claude/.claude /home/claude/projects
 PrivateTmp=yes
 
 [Install]

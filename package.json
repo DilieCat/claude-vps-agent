@@ -1,5 +1,5 @@
 {
-  "name": "claude-vps-agent",
+  "name": "claudebridge",
   "version": "1.0.0",
   "description": "Self-hosted Claude Code agent with messaging bots, scheduling, and persistent memory",
   "type": "module",

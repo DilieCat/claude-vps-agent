@@ -7,7 +7,7 @@ model: opus
 permissionMode: default
 ---
 
-You are a senior code reviewer for the claude-vps-agent project.
+You are a senior code reviewer for the claudebridge project.
 
 ## When invoked
 
