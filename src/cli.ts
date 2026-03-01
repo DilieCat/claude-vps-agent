@@ -421,6 +421,127 @@ registerCommand({
 });
 
 registerCommand({
+  name: "health",
+  description: "Check system health",
+  run() {
+    printBanner();
+    console.log(pc.bold("Health checks:\n"));
+
+    // 1. claude --version
+    let claudeOk = false;
+    try {
+      const ver = execSync("claude --version 2>&1", { encoding: "utf-8" }).trim();
+      console.log(`  ${pc.green("✓")} Claude CLI: ${pc.dim(ver)}`);
+      claudeOk = true;
+    } catch {
+      console.log(`  ${pc.red("✗")} Claude CLI: not found or not working`);
+    }
+
+    // 2. brain.md readable
+    const brainPath = path.join(ROOT, "data", "brain.md");
+    if (fs.existsSync(brainPath)) {
+      try {
+        fs.accessSync(brainPath, fs.constants.R_OK);
+        const stat = fs.statSync(brainPath);
+        console.log(`  ${pc.green("✓")} Brain: ${pc.dim(`${stat.size} bytes`)}`);
+      } catch {
+        console.log(`  ${pc.red("✗")} Brain: exists but not readable`);
+      }
+    } else {
+      console.log(`  ${pc.yellow("○")} Brain: not found (will be created on first use)`);
+    }
+
+    // 3. data/ directory
+    const dataDir = path.join(ROOT, "data");
+    if (fs.existsSync(dataDir) && fs.statSync(dataDir).isDirectory()) {
+      console.log(`  ${pc.green("✓")} Data directory: ${pc.dim(dataDir)}`);
+    } else {
+      console.log(`  ${pc.red("✗")} Data directory: missing`);
+    }
+
+    // 4. Disk space
+    try {
+      const dfOutput = execSync(`df -h "${ROOT}" | tail -1`, { encoding: "utf-8" }).trim();
+      const parts = dfOutput.split(/\s+/);
+      const available = parts[3];
+      const usePct = parts[4];
+      console.log(`  ${pc.green("✓")} Disk: ${pc.dim(`${available} available (${usePct} used)`)}`);
+    } catch {
+      console.log(`  ${pc.yellow("○")} Disk: unable to check`);
+    }
+
+    console.log();
+    if (claudeOk) {
+      console.log(pc.green("  All critical checks passed."));
+    } else {
+      console.log(pc.red("  Some checks failed — see above."));
+    }
+    console.log();
+  },
+});
+
+registerCommand({
+  name: "stats",
+  description: "Show usage statistics and costs",
+  run() {
+    // Dynamic import to avoid circular dependency at module level
+    const costsPath = path.join(ROOT, "data", "costs.json");
+    if (!fs.existsSync(costsPath)) {
+      printBanner();
+      console.log(pc.dim("  No usage data yet.\n"));
+      return;
+    }
+
+    let entries: Array<{ timestamp: string; costUsd: number; numTurns: number; durationMs: number; promptPreview: string }>;
+    try {
+      entries = JSON.parse(fs.readFileSync(costsPath, "utf-8"));
+    } catch {
+      console.log(pc.red("  Failed to read costs data.\n"));
+      return;
+    }
+
+    printBanner();
+    console.log(pc.bold("  Usage Statistics\n"));
+
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(now);
+    weekStart.setDate(weekStart.getDate() - 7);
+    weekStart.setHours(0, 0, 0, 0);
+    const monthStart = new Date(now);
+    monthStart.setDate(monthStart.getDate() - 30);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const periods: Array<{ label: string; start: Date }> = [
+      { label: "Today", start: todayStart },
+      { label: "Last 7 days", start: weekStart },
+      { label: "Last 30 days", start: monthStart },
+      { label: "All time", start: new Date(0) },
+    ];
+
+    const header = `  ${"Period".padEnd(16)} ${"Requests".padEnd(10)} ${"Cost".padEnd(12)} ${"Avg Time"}`;
+    console.log(pc.bold(header));
+    console.log(pc.dim(`  ${"─".repeat(52)}`));
+
+    for (const p of periods) {
+      const filtered = entries.filter((e) => new Date(e.timestamp) >= p.start);
+      const totalCost = filtered.reduce((s, e) => s + e.costUsd, 0);
+      const avgDuration = filtered.length > 0
+        ? Math.round(filtered.reduce((s, e) => s + e.durationMs, 0) / filtered.length)
+        : 0;
+      const avgSec = (avgDuration / 1000).toFixed(1);
+
+      console.log(
+        `  ${p.label.padEnd(16)} ${String(filtered.length).padEnd(10)} ${pc.green(`$${totalCost.toFixed(4)}`.padEnd(12))} ${pc.dim(`${avgSec}s`)}`,
+      );
+    }
+
+    console.log();
+  },
+});
+
+registerCommand({
   name: "help",
   description: "Show this help message",
   aliases: ["--help", "-h"],

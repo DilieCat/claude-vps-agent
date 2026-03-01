@@ -11,6 +11,7 @@ claude-agent/
 ├── src/lib/session-store.ts    # Per-user session tracking
 ├── src/lib/notifier.ts         # Notification queue for proactive messages
 ├── src/lib/filelock.ts         # Cross-process file locking
+├── src/lib/cost-tracker.ts     # API cost tracking (logCost, getCosts, getTotalCost)
 ├── src/lib/index.ts            # Re-exports for all lib modules
 ├── src/bots/telegram.ts        # Telegram bot module
 ├── src/bots/discord.ts         # Discord bot module
@@ -19,6 +20,7 @@ claude-agent/
 ├── infra/                      # Server provisioning, systemd, deploy scripts
 ├── config/                     # MCP server configs
 ├── data/brain.md               # Persistent brain memory (runtime state, gitignored)
+├── data/costs.json             # API cost log (runtime state, gitignored)
 ├── data/brain.template.md      # Brain template for new setups ({AGENT_NAME} placeholder)
 ├── data/workspace-claude.template.md  # Agent CLAUDE.md template ({AGENT_NAME} placeholder)
 ├── .env.example                # Environment variable template
@@ -132,6 +134,8 @@ registerCommand({
 | `restart` | — | Restart services |
 | `status` | `ps` | Show running services |
 | `logs` | — | Tail log files |
+| `health` | — | Check system health (claude CLI, brain, disk) |
+| `stats` | — | Show cost and usage statistics (period: today/week/month/all) |
 | `setup` | — | Run setup wizard |
 | `help` | `--help`, `-h` | Show help message |
 
