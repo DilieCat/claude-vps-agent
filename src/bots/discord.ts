@@ -496,7 +496,7 @@ async function handleCodeMessage(
       projectDir: session.projectDir,
       allowedTools: CODE_MODE_TOOLS,
       maxBudgetUsd: CODE_MODE_MAX_BUDGET_USD,
-      dangerouslySkipPermissions: true,
+      dangerouslySkipPermissions: process.getuid?.() !== 0,  // disabled when running as root
       mcpConfig: CODE_MODE_MCP_CONFIG,
       cwdOverride: session.projectDir,
       timeoutSeconds: 600, // 10 min for code tasks
