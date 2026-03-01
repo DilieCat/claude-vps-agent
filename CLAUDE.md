@@ -87,6 +87,54 @@ The agent runs in an isolated workspace to prevent loading developer instruction
 - **Why isolation?** Claude Code walks up directories to load CLAUDE.md. Without workspace isolation, the agent loads the developer CLAUDE.md (with git/PR instructions) and behaves as a developer tool instead of a chat assistant.
 - **File access**: The agent uses absolute paths to access user files when asked — workspace isolation does not restrict file access.
 
+## claudebridge CLI — Command Registry
+
+The CLI (`src/cli.ts`) uses a command registry pattern instead of a switch statement. This makes it easy to add new commands without touching the dispatch logic.
+
+### Core interfaces and functions
+
+```typescript
+interface Command {
+  name: string;          // primary command name (lowercase)
+  description: string;   // shown in help output
+  aliases?: string[];    // optional alternate names (e.g. ["--help", "-h"])
+  usage?: string;        // argument hint appended to name in help output
+  run(args: string[]): void | Promise<void>;
+}
+
+registerCommand(cmd: Command): void   // add a command to the registry
+findCommand(name: string): Command    // look up by name or alias (case-insensitive)
+```
+
+### Adding a new command
+
+1. Implement the service logic as a standalone function.
+2. Call `registerCommand({...})` after the existing registrations (before `main`).
+3. The command appears automatically in `claudebridge help` output — no edits needed elsewhere.
+
+```typescript
+registerCommand({
+  name: "mycommand",
+  description: "Does something useful",
+  usage: " [optional-arg]",
+  async run(args) {
+    // implementation
+  },
+});
+```
+
+### Built-in commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `start` | — | Start services (default: all) |
+| `stop` | — | Stop services (default: all) |
+| `restart` | — | Restart services |
+| `status` | `ps` | Show running services |
+| `logs` | — | Tail log files |
+| `setup` | — | Run setup wizard |
+| `help` | `--help`, `-h` | Show help message |
+
 ## Important
 
 - NEVER hardcode API keys or tokens

@@ -124,9 +124,10 @@ All config is via environment variables. Run `npx tsx setup.ts` or see [`.env.ex
 claudebridge start   [telegram|discord|scheduler|all]  # Start services (default: all)
 claudebridge stop    [telegram|discord|scheduler|all]  # Stop services (default: all)
 claudebridge restart [telegram|discord|scheduler|all]  # Restart services
-claudebridge status                                    # Show status table with uptime
+claudebridge status                                    # Show status table with uptime (alias: ps)
 claudebridge logs    [telegram|discord|scheduler]      # Tail log files
 claudebridge setup                                     # Re-run setup wizard
+claudebridge help                                      # Show help (alias: --help, -h)
 ```
 
 Logs are written to `logs/<service>.log`. PIDs are tracked in `.pids/`.

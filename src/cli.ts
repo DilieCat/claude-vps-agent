@@ -100,7 +100,31 @@ function printBanner(): void {
   console.log(pc.dim("  process manager for Claude Code services\n"));
 }
 
-// ── Commands ─────────────────────────────────────────────────────────
+// ── Command Registry ─────────────────────────────────────────────────
+
+interface Command {
+  name: string;
+  description: string;
+  aliases?: string[];
+  usage?: string;
+  run(args: string[]): void | Promise<void>;
+}
+
+const commands: Command[] = [];
+
+function registerCommand(cmd: Command): void {
+  commands.push(cmd);
+}
+
+function findCommand(name: string): Command | undefined {
+  const lower = name.toLowerCase();
+  return commands.find(
+    (cmd) =>
+      cmd.name === lower || (cmd.aliases && cmd.aliases.includes(lower)),
+  );
+}
+
+// ── Service operations ───────────────────────────────────────────────
 
 async function startService(service: ServiceKey): Promise<void> {
   const def = SERVICES[service];
@@ -292,14 +316,14 @@ async function runSetup(): Promise<void> {
 }
 
 function printUsage(): void {
-  const commands = [
-    [pc.green("start"), "  [telegram|discord|scheduler|all]", "Start services (default: all)"],
-    [pc.green("stop"), "   [telegram|discord|scheduler|all]", "Stop services (default: all)"],
-    [pc.green("restart"), "[telegram|discord|scheduler|all]", "Restart services"],
-    [pc.green("status"), "                               ", "Show running services"],
-    [pc.green("logs"), "   [service]                     ", "Tail log files"],
-    [pc.green("setup"), "                                ", "Run setup wizard"],
-  ];
+  const cmdLines = commands
+    .filter((cmd) => cmd.name !== "help")
+    .map((cmd) => {
+      const nameStr = pc.green(cmd.name);
+      const usageStr = cmd.usage ?? "";
+      return `  ${nameStr}${usageStr.padEnd(40 - cmd.name.length)}  ${pc.dim(cmd.description)}`;
+    })
+    .join("\n");
 
   const examples = [
     ["claudebridge start", "start all services"],
@@ -308,12 +332,8 @@ function printUsage(): void {
     ["claudebridge status", "show status table"],
   ];
 
-  const cmdLines = commands
-    .map(([cmd, args, desc]) => `  ${cmd}${args}  ${pc.dim(desc)}`)
-    .join("\n");
-
   const exampleLines = examples
-    .map(([cmd, desc]) => `  ${pc.cyan(cmd.padEnd(34))} ${pc.dim("# " + desc)}`)
+    .map(([cmd, desc]) => `  ${pc.cyan(cmd!.padEnd(34))} ${pc.dim("# " + desc)}`)
     .join("\n");
 
   const content =
@@ -331,51 +351,97 @@ function printUsage(): void {
   );
 }
 
+// ── Register commands ────────────────────────────────────────────────
+
+registerCommand({
+  name: "start",
+  description: "Start services (default: all)",
+  usage: "  [telegram|discord|scheduler|all]",
+  async run(args) {
+    const services = resolveServices(args[0]);
+    printBanner();
+    console.log(pc.bold("Starting services...\n"));
+    for (const svc of services) await startService(svc);
+    console.log();
+  },
+});
+
+registerCommand({
+  name: "stop",
+  description: "Stop services (default: all)",
+  usage: "   [telegram|discord|scheduler|all]",
+  async run(args) {
+    const services = resolveServices(args[0]);
+    printBanner();
+    console.log(pc.bold("Stopping services...\n"));
+    for (const svc of services) await stopService(svc);
+    console.log();
+  },
+});
+
+registerCommand({
+  name: "restart",
+  description: "Restart services",
+  usage: " [telegram|discord|scheduler|all]",
+  async run(args) {
+    const services = resolveServices(args[0]);
+    printBanner();
+    console.log(pc.bold("Restarting services...\n"));
+    for (const svc of services) await stopService(svc);
+    for (const svc of services) await startService(svc);
+    console.log();
+  },
+});
+
+registerCommand({
+  name: "status",
+  description: "Show running services",
+  aliases: ["ps"],
+  run() {
+    printBanner();
+    statusAll();
+  },
+});
+
+registerCommand({
+  name: "logs",
+  description: "Tail log files",
+  usage: "   [service]                     ",
+  run(args) {
+    showLogs(args[0]);
+  },
+});
+
+registerCommand({
+  name: "setup",
+  description: "Run setup wizard",
+  async run() {
+    await runSetup();
+  },
+});
+
+registerCommand({
+  name: "help",
+  description: "Show this help message",
+  aliases: ["--help", "-h"],
+  run() {
+    printBanner();
+    printUsage();
+  },
+});
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const [command, target] = process.argv.slice(2);
+  const [commandName, ...rest] = process.argv.slice(2);
 
-  switch (command) {
-    case "start": {
-      const services = resolveServices(target);
-      printBanner();
-      console.log(pc.bold("Starting services...\n"));
-      for (const svc of services) await startService(svc);
-      console.log();
-      break;
-    }
-    case "stop": {
-      const services = resolveServices(target);
-      printBanner();
-      console.log(pc.bold("Stopping services...\n"));
-      for (const svc of services) await stopService(svc);
-      console.log();
-      break;
-    }
-    case "restart": {
-      const services = resolveServices(target);
-      printBanner();
-      console.log(pc.bold("Restarting services...\n"));
-      for (const svc of services) await stopService(svc);
-      for (const svc of services) await startService(svc);
-      console.log();
-      break;
-    }
-    case "status":
-      printBanner();
-      statusAll();
-      break;
-    case "logs":
-      showLogs(target);
-      break;
-    case "setup":
-      await runSetup();
-      break;
-    default:
-      printBanner();
-      printUsage();
-      break;
+  const cmd = commandName ? findCommand(commandName) : undefined;
+
+  if (cmd) {
+    await cmd.run(rest);
+  } else {
+    printBanner();
+    printUsage();
   }
 }
 
