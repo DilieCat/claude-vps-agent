@@ -1,11 +1,11 @@
 # Scheduler
 
-YAML-based task scheduler for Claude Code. Define tasks with cron schedules, and the scheduler dispatches prompts to Claude via `ClaudeBridge`.
+YAML-based task scheduler for Claude Code. Define tasks with cron schedules, and the scheduler dispatches prompts to Claude via `LivingBridge` (with `ClaudeBridge` fallback).
 
 ## Setup
 
 ```bash
-pip install -r scheduler/requirements.txt
+npm install
 ```
 
 Ensure `.env` is configured at the project root with `CLAUDE_PROJECT_DIR`, `CLAUDE_MODEL`, and `CLAUDE_ALLOWED_TOOLS`.
@@ -14,24 +14,24 @@ Ensure `.env` is configured at the project root with `CLAUDE_PROJECT_DIR`, `CLAU
 
 ```bash
 # One-shot: run all due tasks, then exit
-python scheduler/scheduler.py --once
+npx tsx src/scheduler.ts --once
 
-# Daemon mode: check every 60 seconds
-python scheduler/scheduler.py
+# Daemon mode: run continuously with cron jobs active
+npx tsx src/scheduler.ts
 
-# Custom interval (120 seconds)
-python scheduler/scheduler.py --interval 120
+# Custom check interval (120 seconds)
+npx tsx src/scheduler.ts --interval 120
 
 # List tasks and next run times
-python scheduler/scheduler.py --list
+npx tsx src/scheduler.ts --list
 
 # Custom tasks file
-python scheduler/scheduler.py --tasks /path/to/tasks.yaml
+npx tsx src/scheduler.ts --tasks /path/to/tasks.yaml
 ```
 
 ## Task Definition
 
-Edit `tasks.yaml` to define scheduled tasks:
+Edit `scheduler/tasks.yaml` to define scheduled tasks:
 
 ```yaml
 tasks:
@@ -57,5 +57,5 @@ All task results are written to `scheduler/logs/`:
 Use the systemd unit in `infra/systemd/` or run directly:
 
 ```bash
-nohup python scheduler/scheduler.py &
+nohup npx tsx src/scheduler.ts &
 ```

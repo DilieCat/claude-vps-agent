@@ -20,8 +20,8 @@ You want the functionality of remote AI agents (messaging integration, autonomou
 
 | Module | Description |
 |--------|-------------|
-| **Telegram Bot** | Message Claude from Telegram. Supports allowed users, typing indicators, long message splitting. |
-| **Discord Bot** | Slash commands (`/ask`, `/project`, `/model`). Thread-per-conversation. |
+| **Telegram Bot** | Message Claude from Telegram. Supports allowed users, typing indicators, long message splitting, and concurrency control. |
+| **Discord Bot** | Slash commands (`/ask`, `/project`, `/model`). Thread-per-conversation. Concurrency control prevents overlapping requests. |
 | **Scheduler** | YAML-based cron tasks. Daily code reviews, dependency checks, custom prompts. |
 | **Living Agent** | Persistent memory (brain system), session continuity, proactive notifications. |
 | **Agent Personality** | Give your agent a name and persona. First-interaction onboarding collects user preferences. |
@@ -164,11 +164,18 @@ Living agent mode activates automatically when the brain system is available. Th
 
 **Bot commands:**
 
-| Command | Description |
-|---------|-------------|
-| `/reset` | Clear your session and start fresh |
-| `/brain` | View the current brain state |
-| `/notify` | Toggle proactive notifications on/off |
+| Command | Bots | Description |
+|---------|------|-------------|
+| `/reset` | Both | Clear your session and start fresh |
+| `/brain` | Both | View the current brain state |
+| `/notify` | Both | Toggle proactive notifications on/off |
+| `/project [path]` | Both | View or change the active project directory |
+| `/model [name]` | Both | View or change the Claude model |
+| `/ask <prompt>` | Both | Ask Claude a question |
+| `/respond <mode>` | Discord | Set response mode: `all` (all messages) or `mentions` (only @mentions) |
+
+**Concurrency control:**
+Both bots enforce a single-request-at-a-time policy. If a request is already being processed when a new message arrives, the bot replies with a "still busy" message and discards the new request. This prevents Claude from being called in parallel and keeps costs predictable.
 
 **Security:**
 - `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
