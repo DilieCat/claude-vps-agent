@@ -1,5 +1,7 @@
 # claude-agent
 
+[![CI](https://github.com/DilieCat/claudebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/DilieCat/claudebridge/actions/workflows/ci.yml)
+
 Run Claude Code as a persistent agent on any machine -- VPS, homelab, laptop, or server. Includes Telegram/Discord bot integrations, task scheduling, and MCP server support. 100% official, no ban risk.
 
 ## Why?
@@ -62,6 +64,26 @@ npm run discord             # Run Discord bot directly
 npm run scheduler           # Run scheduler directly
 ```
 
+## Testing
+
+Unit tests are written with [vitest](https://vitest.dev/) and cover the core library modules.
+
+```bash
+npm test          # Run all tests once
+npm run test:watch  # Run tests in watch mode
+```
+
+Tests live in the `tests/` directory:
+
+| File | What it covers |
+|------|---------------|
+| `tests/brain.test.ts` | Brain read/write, sections, user preferences |
+| `tests/session-store.test.ts` | Session get/set/clear/cleanup |
+| `tests/message-utils.test.ts` | `splitMessage` edge cases (empty, exact limit, unicode) |
+| `tests/cost-tracker.test.ts` | `logCost`, `getCosts`, `getTotalCost` by period |
+
+CI runs on every push and pull request to `main` (type check + tests).
+
 ## Tech Stack
 
 - **TypeScript** -- all source code in `src/`
@@ -72,6 +94,7 @@ npm run scheduler           # Run scheduler directly
 - **tsx** -- TypeScript execution without a compile step
 - **@clack/prompts** -- interactive CLI prompts for the setup wizard
 - **boxen**, **figlet**, **gradient-string**, **picocolors**, **nanospinner** -- setup wizard UI
+- **vitest** -- unit test framework (tests in `tests/`)
 
 ## Architecture
 
