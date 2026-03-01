@@ -126,6 +126,8 @@ claudebridge stop    [telegram|discord|scheduler|all]  # Stop services (default:
 claudebridge restart [telegram|discord|scheduler|all]  # Restart services
 claudebridge status                                    # Show status table with uptime (alias: ps)
 claudebridge logs    [telegram|discord|scheduler]      # Tail log files
+claudebridge health                                    # Check system health (claude CLI, brain, disk)
+claudebridge stats   [today|week|month|all]            # Show cost and usage statistics
 claudebridge setup                                     # Re-run setup wizard
 claudebridge help                                      # Show help (alias: --help, -h)
 ```
@@ -173,6 +175,7 @@ Living agent mode activates automatically when the brain system is available. Th
 | `/model [name]` | Both | View or change the Claude model |
 | `/ask <prompt>` | Both | Ask Claude a question |
 | `/respond <mode>` | Discord | Set response mode: `all` (all messages) or `mentions` (only @mentions) |
+| `/costs [period]` | Both | Show cost summary (period: today/week/month/all, default: today) |
 
 **Concurrency control:**
 Both bots enforce a single-request-at-a-time policy. If a request is already being processed when a new message arrives, the bot replies with a "still busy" message and discards the new request. This prevents Claude from being called in parallel and keeps costs predictable.
