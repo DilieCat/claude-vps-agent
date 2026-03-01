@@ -59,6 +59,9 @@ interface UserSettings {
 }
 const userSettings = new Map<string, UserSettings>();
 
+// Concurrency control — single-user environment, one request at a time
+let isProcessing = false;
+
 // ---------------------------------------------------------------------------
 // Bridge instance — try LivingBridge first, fall back to ClaudeBridge
 // ---------------------------------------------------------------------------
@@ -148,37 +151,47 @@ async function sendLong(ctx: Context, text: string): Promise<void> {
 // Core prompt handling
 // ---------------------------------------------------------------------------
 async function handlePrompt(ctx: Context, prompt: string): Promise<void> {
-  const userId = ctx.from!.id;
-
-  // Send typing indicator
-  await ctx.sendChatAction("typing");
-
-  const userBridge = getUserBridge(userId);
-  let response: ClaudeResponse;
+  if (isProcessing) {
+    await ctx.reply("Ik ben nog bezig met je vorige vraag, even geduld...");
+    return;
+  }
+  isProcessing = true;
 
   try {
-    if (livingMode && userBridge instanceof LivingBridge) {
-      response = await userBridge.askAs("telegram", String(userId), prompt);
-    } else {
-      response = await userBridge.askAsync(prompt);
+    const userId = ctx.from!.id;
+
+    // Send typing indicator
+    await ctx.sendChatAction("typing");
+
+    const userBridge = getUserBridge(userId);
+    let response: ClaudeResponse;
+
+    try {
+      if (livingMode && userBridge instanceof LivingBridge) {
+        response = await userBridge.askAs("telegram", String(userId), prompt);
+      } else {
+        response = await userBridge.askAsync(prompt);
+      }
+    } catch (err) {
+      console.error("Bridge call failed:", err);
+      await ctx.reply(
+        "Sorry, something went wrong while contacting Claude. Please try again later."
+      );
+      return;
     }
-  } catch (err) {
-    console.error("Bridge call failed:", err);
-    await ctx.reply(
-      "Sorry, something went wrong while contacting Claude. Please try again later."
-    );
-    return;
+
+    if (response.isError) {
+      await ctx.reply(`Error: ${response.text}`);
+      return;
+    }
+
+    const text = response.text || "(empty response)";
+    const footer = `\n\n[cost=$${response.costUsd.toFixed(4)} | turns=${response.numTurns}]`;
+
+    await sendLong(ctx, text + footer);
+  } finally {
+    isProcessing = false;
   }
-
-  if (response.isError) {
-    await ctx.reply(`Error: ${response.text}`);
-    return;
-  }
-
-  const text = response.text || "(empty response)";
-  const footer = `\n\n[cost=$${response.costUsd.toFixed(4)} | turns=${response.numTurns}]`;
-
-  await sendLong(ctx, text + footer);
 }
 
 // ---------------------------------------------------------------------------

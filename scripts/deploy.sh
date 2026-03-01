@@ -46,35 +46,20 @@ echo "=== [1/4] Syncing project files ==="
 rsync -avz --delete \
   --exclude '.env' \
   --exclude '.git/' \
-  --exclude '__pycache__/' \
-  --exclude '.venv/' \
   --exclude 'node_modules/' \
   --exclude '.claude/' \
-  --exclude '*.pyc' \
   -e "${RSYNC_SSH}" \
   "${PROJECT_DIR}/" \
   "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/"
 
-# --- Step 2: Install Python dependencies ---
+# --- Step 2: Install Node.js dependencies ---
 echo ""
-echo "=== [2/4] Installing Python dependencies ==="
+echo "=== [2/4] Installing Node.js dependencies ==="
 ${SSH_CMD} bash -s <<'REMOTESH'
 set -euo pipefail
 cd ~/claudebridge
-
-# Create venv if it doesn't exist
-if [ ! -d .venv ]; then
-  python3 -m venv .venv
-fi
-
-# Install dependencies from all requirements files found
-source .venv/bin/activate
-for req in requirements.txt */requirements.txt; do
-  if [ -f "${req}" ]; then
-    echo "  Installing from ${req}..."
-    pip install -q -r "${req}"
-  fi
-done
+echo "  Running npm install..."
+npm install --production
 REMOTESH
 
 # --- Step 3: Install/reload systemd services ---

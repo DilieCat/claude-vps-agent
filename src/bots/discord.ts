@@ -56,13 +56,16 @@ interface UserSettings {
 }
 const userSettings = new Map<string, UserSettings>();
 
+// Concurrency control — single-user environment, one request at a time
+let isProcessing = false;
+
 // ---------------------------------------------------------------------------
 // Bridge instance — try LivingBridge, fall back to ClaudeBridge
 // ---------------------------------------------------------------------------
-const allowedTools =
-  CLAUDE_ALLOWED_TOOLS.split(",")
-    .map((t) => t.trim())
-    .filter(Boolean) || undefined;
+const _parsedTools = CLAUDE_ALLOWED_TOOLS.split(",")
+  .map((t) => t.trim())
+  .filter(Boolean);
+const allowedTools = _parsedTools.length > 0 ? _parsedTools : undefined;
 
 let bridge: ClaudeBridge | LivingBridge;
 let livingMode = false;
@@ -71,7 +74,7 @@ try {
   bridge = new LivingBridge({
     projectDir: CLAUDE_PROJECT_DIR,
     model: CLAUDE_MODEL,
-    allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+    allowedTools,
   });
   livingMode = true;
   console.log("[discord] LivingBridge initialized — living agent mode active.");
@@ -80,7 +83,7 @@ try {
   bridge = new ClaudeBridge({
     projectDir: CLAUDE_PROJECT_DIR,
     model: CLAUDE_MODEL,
-    allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+    allowedTools,
   });
 }
 
@@ -126,7 +129,11 @@ function isAllowed(userId: string, userTag: string): boolean {
 }
 
 function validateProjectPath(rawPath: string): string | null {
-  const real = fs.realpathSync(path.resolve(rawPath.replace(/^~/, process.env["HOME"] ?? ".")));
+  const resolved = path.resolve(rawPath.replace(/^~/, process.env["HOME"] ?? "."));
+  if (!fs.existsSync(resolved)) {
+    return null;
+  }
+  const real = fs.realpathSync(resolved);
   if (real !== ALLOWED_PROJECT_BASE && !real.startsWith(ALLOWED_PROJECT_BASE + path.sep)) {
     return null;
   }
@@ -142,7 +149,7 @@ function getUserBridge(userId: string): ClaudeBridge | LivingBridge {
   const overridden = new BridgeClass({
     projectDir: settings.projectDir ?? bridge.projectDir,
     model: settings.model ?? bridge.model,
-    allowedTools: bridge.allowedTools.length > 0 ? bridge.allowedTools : undefined,
+    allowedTools: bridge.allowedTools,
   });
 
   // For LivingBridge, share the same brain and sessions
@@ -216,58 +223,68 @@ async function askClaude(prompt: string, interaction: ChatInputCommandInteractio
   const channel = interaction.channel;
   if (!channel || !("send" in channel)) return;
 
-  // Create a thread for the conversation if we're in a text channel
-  let target: TextChannel | ThreadChannel | DMChannel;
-  if (channel.type === ChannelType.GuildText) {
-    const threadName = prompt.length <= 100 ? prompt : prompt.slice(0, 97) + "...";
-    target = await (channel as TextChannel).threads.create({
-      name: threadName,
-      autoArchiveDuration: 60,
-    });
-  } else {
-    // Already in a thread, DM, or other sendable channel — reply in place
-    target = channel as TextChannel | ThreadChannel | DMChannel;
+  if (isProcessing) {
+    await interaction.followUp({ content: "Ik ben nog bezig met je vorige vraag, even geduld...", ephemeral: true });
+    return;
   }
+  isProcessing = true;
 
-  // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
-  await target.sendTyping();
-  const typingInterval = setInterval(() => {
-    target.sendTyping().catch(() => {});
-  }, 8_000);
-
-  const userBridge = getUserBridge(userId);
-  let response;
   try {
-    if (livingMode && userBridge instanceof LivingBridge) {
-      response = await userBridge.askAs("discord", userId, prompt);
+    // Create a thread for the conversation if we're in a text channel
+    let target: TextChannel | ThreadChannel | DMChannel;
+    if (channel.type === ChannelType.GuildText) {
+      const threadName = prompt.length <= 100 ? prompt : prompt.slice(0, 97) + "...";
+      target = await (channel as TextChannel).threads.create({
+        name: threadName,
+        autoArchiveDuration: 60,
+      });
     } else {
-      response = await userBridge.askAsync(prompt);
+      // Already in a thread, DM, or other sendable channel — reply in place
+      target = channel as TextChannel | ThreadChannel | DMChannel;
     }
-  } catch {
+
+    // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
+    await target.sendTyping();
+    const typingInterval = setInterval(() => {
+      target.sendTyping().catch(() => {});
+    }, 8_000);
+
+    const userBridge = getUserBridge(userId);
+    let response;
+    try {
+      if (livingMode && userBridge instanceof LivingBridge) {
+        response = await userBridge.askAs("discord", userId, prompt);
+      } else {
+        response = await userBridge.askAsync(prompt);
+      }
+    } catch {
+      clearInterval(typingInterval);
+      await target.send(
+        "Sorry, something went wrong while contacting Claude. Please try again later.",
+      );
+      return;
+    }
+
     clearInterval(typingInterval);
-    await target.send(
-      "Sorry, something went wrong while contacting Claude. Please try again later.",
-    );
-    return;
-  }
 
-  clearInterval(typingInterval);
+    if (response.isError) {
+      await target.send(`**Error:** ${response.text}`);
+      return;
+    }
 
-  if (response.isError) {
-    await target.send(`**Error:** ${response.text}`);
-    return;
-  }
+    // Send the response, splitting if necessary
+    const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
+    for (const chunk of chunks) {
+      await target.send(chunk);
+    }
 
-  // Send the response, splitting if necessary
-  const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
-  for (const chunk of chunks) {
-    await target.send(chunk);
-  }
-
-  // Footer with cost info
-  if (response.costUsd > 0) {
-    const footer = `-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`;
-    await target.send(footer);
+    // Footer with cost info
+    if (response.costUsd > 0) {
+      const footer = `-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`;
+      await target.send(footer);
+    }
+  } finally {
+    isProcessing = false;
   }
 }
 
@@ -515,43 +532,53 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
-  await message.channel.sendTyping();
-  const typingInterval = setInterval(() => {
-    message.channel.sendTyping().catch(() => {});
-  }, 8_000);
+  if (isProcessing) {
+    await message.reply("Ik ben nog bezig met je vorige vraag, even geduld...");
+    return;
+  }
+  isProcessing = true;
 
-  const userBridge = getUserBridge(userId);
-  let response;
   try {
-    if (livingMode && userBridge instanceof LivingBridge) {
-      response = await userBridge.askAs("discord", userId, prompt);
-    } else {
-      response = await userBridge.askAsync(prompt);
+    // Show typing indicator (repeating every 8s since Discord typing expires after ~10s)
+    await message.channel.sendTyping();
+    const typingInterval = setInterval(() => {
+      message.channel.sendTyping().catch(() => {});
+    }, 8_000);
+
+    const userBridge = getUserBridge(userId);
+    let response;
+    try {
+      if (livingMode && userBridge instanceof LivingBridge) {
+        response = await userBridge.askAs("discord", userId, prompt);
+      } else {
+        response = await userBridge.askAsync(prompt);
+      }
+    } catch (err) {
+      clearInterval(typingInterval);
+      console.error(`[discord] Error processing message from ${userId}:`, err);
+      await message.reply("Sorry, something went wrong while contacting Claude. Please try again later.");
+      return;
     }
-  } catch (err) {
+
     clearInterval(typingInterval);
-    console.error(`[discord] Error processing message from ${userId}:`, err);
-    await message.reply("Sorry, something went wrong while contacting Claude. Please try again later.");
-    return;
-  }
 
-  clearInterval(typingInterval);
+    if (response.isError) {
+      await message.reply(`**Error:** ${response.text}`);
+      return;
+    }
 
-  if (response.isError) {
-    await message.reply(`**Error:** ${response.text}`);
-    return;
-  }
+    // Send the response, splitting if necessary
+    const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
+    for (const chunk of chunks) {
+      await message.reply(chunk);
+    }
 
-  // Send the response, splitting if necessary
-  const chunks = splitMessage(response.text, DISCORD_MAX_LEN);
-  for (const chunk of chunks) {
-    await message.reply(chunk);
-  }
-
-  // Footer with cost info
-  if (response.costUsd > 0) {
-    await message.channel.send(`-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`);
+    // Footer with cost info
+    if (response.costUsd > 0) {
+      await message.channel.send(`-# Cost: $${response.costUsd.toFixed(4)} | Turns: ${response.numTurns}`);
+    }
+  } finally {
+    isProcessing = false;
   }
 });
 
