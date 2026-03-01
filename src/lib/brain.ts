@@ -55,7 +55,6 @@ export class Brain {
 
   /** Return the full brain content for injection into a Claude prompt. */
   getContext(): string {
-    this.reload();
     return this.content;
   }
 

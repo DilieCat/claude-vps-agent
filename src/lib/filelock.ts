@@ -99,10 +99,9 @@ function acquireLockSyncExcl(filePath: string): () => void {
         continue;
       }
       // Brief sleep to avoid burning CPU
-      const waitUntil = Date.now() + LOCK_POLL_MS;
-      while (Date.now() < waitUntil) {
-        /* spin */
-      }
+      const sharedBuffer = new SharedArrayBuffer(4);
+      const int32 = new Int32Array(sharedBuffer);
+      Atomics.wait(int32, 0, 0, LOCK_POLL_MS);
     }
   }
 
