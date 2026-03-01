@@ -203,6 +203,12 @@ Living agent mode activates automatically when the brain system is available. Th
 **Concurrency control:**
 Both bots enforce a single-request-at-a-time policy. If a request is already being processed when a new message arrives, the bot replies with a "still busy" message and discards the new request. This prevents Claude from being called in parallel and keeps costs predictable.
 
+**File attachments:**
+Both bots support sending files to Claude. Supported types: images (jpg, jpeg, png, gif, webp), PDFs, and text files (txt, md, ts, js, py). Files are downloaded to a temp directory, passed to Claude, and cleaned up automatically. Unsupported file types receive an error message.
+
+- **Telegram**: send a photo or document — the bot handles it automatically.
+- **Discord**: attach a file to any message the bot will process.
+
 **Security:**
 - `ALLOWED_PROJECT_BASE` restricts which directories `/project` can switch to
 - File locking (`src/lib/filelock.ts`) ensures multi-process safety for shared state files (brain, sessions)
